@@ -4,5 +4,5 @@ Currently only interprets Brainfuck programs, but aim to supply JIT compilation 
 
 ```
 $ cargo build
-$ cargo run -- test_program/sierpenski.bf
+$ cargo run -- test_program/hello_world.bf
 ```
