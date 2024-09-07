@@ -23,11 +23,7 @@ impl IRInsn {
     fn is_collapsible(&self) -> bool {
         use IRInsn::*;
 
-        match self {
-            IncPtr(_) | DecPtr(_) | IncVal(_) | DecVal(_) => true,
-
-            _ => false,
-        }
+        matches!(self, IncPtr(_) | DecPtr(_) | IncVal(_) | DecVal(_))
     }
 
     fn collapse_with(&mut self, other_insn: Self) {
@@ -37,7 +33,7 @@ impl IRInsn {
         assert!(self.tag() == other_insn.tag());
 
         match (self, other_insn) {
-            (IncPtr(x), IncPtr(y)) | (DecPtr(x), DecPtr(y)) => *x += y,
+            (IncPtr(x), IncPtr(y)) | (DecPtr(x), DecPtr(y)) => *x = x.wrapping_add(y),
 
             (IncVal(x), IncVal(y)) | (DecVal(x), DecVal(y)) => *x += y,
 

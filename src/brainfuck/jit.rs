@@ -19,7 +19,7 @@ impl Eval for Jit {
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
                 MapFlags::empty(),
             )
-            .expect("OS did give executable memory for JIT compilation!");
+            .expect("Failed to get executable memory from OS for JIT compilation!");
 
             slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), 4096)
         };
