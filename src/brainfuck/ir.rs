@@ -102,7 +102,7 @@ pub trait CollapseIR: Iterator<Item = IRInsn> + Sized {
 impl<I: Iterator<Item = IRInsn>> CollapseIR for I {}
 
 #[derive(Debug)]
-pub struct IR(Box<[IRInsn]>);
+pub struct IR(pub Box<[IRInsn]>);
 
 impl From<Program> for IR {
     fn from(prog: Program) -> IR {
