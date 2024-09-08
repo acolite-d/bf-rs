@@ -1,5 +1,5 @@
 use super::{
-    ir::FoldedIR,
+    ir::IR,
     program::{Operator, Program},
     Eval,
 };
@@ -69,7 +69,7 @@ impl Eval for Interpreter {
         Ok(())
     }
 
-    fn eval_ir(ir: FoldedIR) -> Result<Self::Output, ()> {
+    fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
         unimplemented!()
     }
 }

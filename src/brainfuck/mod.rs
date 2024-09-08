@@ -8,5 +8,5 @@ pub trait Eval {
 
     fn eval_source(src: program::Program) -> Result<Self::Output, ()>;
 
-    fn eval_ir(ir: ir::FoldedIR) -> Result<Self::Output, ()>;
+    fn eval_ir(ir: ir::IR) -> Result<Self::Output, ()>;
 }

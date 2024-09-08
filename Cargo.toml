@@ -3,6 +3,9 @@ name = "brainrust"
 version = "0.1.0"
 edition = "2021"
 
+[lints.rust]
+unused = "allow"
+
 [dependencies]
 enum-tag = "0.3.0"
 nix = { version = "0.29.0", features = ["mman"] }

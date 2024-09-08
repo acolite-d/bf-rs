@@ -65,6 +65,12 @@ pub struct Collapse<I> {
     iter: I,
 }
 
+impl<I> Collapse<I> {
+    fn new(iter: I) -> Collapse<I> {
+        Self { iter }
+    }
+}
+
 impl<I> Iterator for Collapse<Peekable<I>>
 where
     I: Iterator<Item = IRInsn>,
@@ -87,20 +93,28 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct FoldedIR {
-    ir_insns: Box<[IRInsn]>,
-    fwd_jump_table: HashMap<usize, usize>,
-    bwd_jump_table: HashMap<usize, usize>,
+pub trait CollapseIR: Iterator<Item = IRInsn> + Sized {
+    fn collapse(self) -> Collapse<Peekable<Self>> {
+        Collapse::new(self.peekable())
+    }
 }
 
-impl TryFrom<Program> for FoldedIR {
-    type Error = ();
+impl<I: Iterator<Item = IRInsn>> CollapseIR for I {}
 
-    fn try_from(prog: Program) -> Result<Self, Self::Error> {
-        //let mut ir = vec![];
-        //for op in prog.code.iter().copied() {}
+#[derive(Debug)]
+pub struct IR(Box<[IRInsn]>);
 
-        todo!()
+impl From<Program> for IR {
+    fn from(prog: Program) -> IR {
+        // TODO: Go back and add IntoIterator consuming iterator creator for a brainfuck program
+        let ir = prog
+            .code
+            .iter()
+            .copied()
+            .map(|op| op.into())
+            .collapse()
+            .collect();
+
+        Self(ir)
     }
 }

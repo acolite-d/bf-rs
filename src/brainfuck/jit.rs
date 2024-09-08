@@ -1,4 +1,4 @@
-use super::{ir::FoldedIR, program::Program, Eval};
+use super::{ir::IR, program::Program, Eval};
 use nix::sys::mman::{mmap_anonymous, MapFlags, ProtFlags};
 use std::{num::NonZero, slice};
 
@@ -11,7 +11,7 @@ impl Eval for Jit {
         unimplemented!()
     }
 
-    fn eval_ir(ir: FoldedIR) -> Result<Self::Output, ()> {
+    fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
         let mut exec_mem: &mut [u8] = unsafe {
             let ptr = mmap_anonymous(
                 None,

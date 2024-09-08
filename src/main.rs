@@ -1,6 +1,6 @@
 mod brainfuck;
 
-use brainfuck::{interpreter::Interpreter, program::Program, Eval};
+use brainfuck::{interpreter::Interpreter, ir::IR, program::Program, Eval};
 use std::{env, fs, process};
 
 fn main() {
@@ -9,7 +9,9 @@ fn main() {
     if let Some(path) = env::args().nth(1) {
         if let Ok(source_code) = fs::read_to_string(&path) {
             let program = Program::new(&source_code);
-            Interpreter::eval_source(program).unwrap();
+            dbg!(&program);
+            let ir: IR = program.into();
+            dbg!(&ir);
         } else {
             eprintln!("Failed to open file {}", path);
             process::exit(-1)
