@@ -80,3 +80,12 @@ impl Program {
         }
     }
 }
+
+impl IntoIterator for Program {
+    type Item = Operator;
+    type IntoIter = std::vec::IntoIter<Operator>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.code.into_vec().into_iter()
+    }
+}

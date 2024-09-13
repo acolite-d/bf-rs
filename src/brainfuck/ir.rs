@@ -13,8 +13,8 @@ pub enum IRInsn {
     DecVal(u8) = 2,
     IncPtr(u32) = 3,
     DecPtr(u32) = 4,
-    JumpIfZero(usize) = 5,
-    JumpIfNonZero(usize) = 6,
+    JumpIfZero(i32) = 5,
+    JumpIfNonZero(i32) = 6,
     GetChar = 7,
     PutChar = 8,
 }
@@ -106,14 +106,7 @@ pub struct IR(pub Box<[IRInsn]>);
 
 impl From<Program> for IR {
     fn from(prog: Program) -> IR {
-        // TODO: Go back and add IntoIterator consuming iterator creator for a brainfuck program
-        let ir = prog
-            .code
-            .iter()
-            .copied()
-            .map(|op| op.into())
-            .collapse()
-            .collect();
+        let ir = prog.into_iter().map(|op| op.into()).collapse().collect();
 
         Self(ir)
     }

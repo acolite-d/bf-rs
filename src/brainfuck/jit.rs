@@ -3,8 +3,8 @@ use super::{
     program::Program,
     Eval,
 };
+
 use nix::sys::mman::{mmap_anonymous, MapFlags, ProtFlags};
-use core::slice::memchr;
 use std::{io::Write, num::NonZero, slice};
 
 pub struct Jit;
@@ -33,36 +33,71 @@ impl Eval for Jit {
 
         // Convert it to a mutable slice of bytes (&mut [u8]) that has the
         // ergonomic Write trait for writing bytes into buffers, makes things easier to work with
-        let mem_slice = unsafe { slice::from_raw_parts_mut(exec_mem, 4096) };
+        let mut mem_slice = unsafe { slice::from_raw_parts_mut(exec_mem, 4096) };
 
         // With executable region of memory in hand, iterate over IR instructions, emitting the
         // correct machine code to the slice for every instruction. Once we have iterated and
         // emitted all our machine code, exec_mem slice should hold the code to a function.
         for ir_insn in ir {
             match ir_insn {
-                IRInsn::IncVal(operand) => 
-                    mem_slice.write(&[0x80, 0x07, operand]) // addb $<operand>, (%rdi)
-
-                IRInsn::DecVal(operand) =>
-                    mem_slice.write(&[0x80, 0x2f, operand]) // subb $<operand>, (%rdi)
-
-                IRInsn::IncPtr(operand) => 
-                    mem_slice.write(&[0x48, 0x83, 0xc7, operand as u8])
-
-                IRInsn::DecPtr(operand) => 
-                    mem_slice.write(&[0x48, 0x83, 0xef, operand as u8])    
-
-                IRInsn::JumpIfZero(dst_offset) => {
-                    let dst = (exec_mem.as_ptr().wrapping_add(dst_offset)) as usize;
+                IRInsn::IncVal(operand) => {
+                    mem_slice
+                        .write_all(&[0x80, 0x07, operand]) // addb $<operand>, (%rdi)
+                        .unwrap();
                 }
-                IRInsn::JumpIfNonZero(dest) => todo!(),
+
+                IRInsn::DecVal(operand) => {
+                    mem_slice
+                        .write_all(&[0x80, 0x2f, operand]) // subb $<operand>, (%rdi)
+                        .unwrap();
+                }
+
+                IRInsn::IncPtr(operand) => {
+                    let bytecode: Vec<u8> = {
+                        let mut v = vec![0x48, 0x83, 0xe9];
+                        v.extend_from_slice(bytemuck::bytes_of(&operand));
+                        v
+                    };
+
+                    mem_slice.write_all(bytecode.as_slice()).unwrap();
+                }
+
+                IRInsn::DecPtr(operand) => {
+                    let bytecode: Vec<u8> = {
+                        let mut v = vec![0x48, 0x83, 0xe9];
+                        v.extend_from_slice(bytemuck::bytes_of(&operand));
+                        v
+                    };
+
+                    mem_slice.write_all(bytecode.as_slice()).unwrap();
+                }
+
+                IRInsn::JumpIfZero(dest_offset) => {
+                    let bytecode: Vec<u8> = {
+                        let mut v = vec![0xe9];
+                        v.extend_from_slice(bytemuck::bytes_of(&dest_offset));
+                        v
+                    };
+
+                    mem_slice.write_all(bytecode.as_slice()).unwrap();
+                }
+                IRInsn::JumpIfNonZero(dest_offset) => {
+                    let bytecode: Vec<u8> = {
+                        let mut v = vec![0xe9];
+                        v.extend_from_slice(bytemuck::bytes_of(&dest_offset));
+                        v
+                    };
+
+                    mem_slice.write_all(bytecode.as_slice()).unwrap();
+                }
                 IRInsn::GetChar => todo!(),
                 IRInsn::PutChar => todo!(),
             }
         }
 
         // Converting a pointer of bytes to a function pointer in Rust is, as one would expect,
-        // very unsafe. This requires an intrinsics function changing arbitrary data types.
+        // very unsafe. This requires an intrinsics function changing arbitrary memory objects
+        // called "transmute".
         let compiled_fn = unsafe { std::mem::transmute::<*mut u8, Self::Output>(exec_mem) };
 
         Ok(compiled_fn)
