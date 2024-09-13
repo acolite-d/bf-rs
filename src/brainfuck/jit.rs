@@ -41,13 +41,13 @@ impl Eval for Jit {
         for ir_insn in ir {
             match ir_insn {
                 IRInsn::IncVal(operand) => 
-                    mem_slice.write(&[0x80, 0x07, operand]) // addb %rdi, $<operand>
+                    mem_slice.write(&[0x80, 0x07, operand]) // addb $<operand>, (%rdi)
 
                 IRInsn::DecVal(operand) =>
-                    mem_slice.write(&[0x80, 0x2f, operand]) // subb %rdi, $<operand>
+                    mem_slice.write(&[0x80, 0x2f, operand]) // subb $<operand>, (%rdi)
 
                 IRInsn::IncPtr(operand) => 
-                    mem_slice.write(&[0x48, 0x83, 0xc7, operand as u8]);
+                    mem_slice.write(&[0x48, 0x83, 0xc7, operand as u8])
 
                 IRInsn::DecPtr(operand) => 
                     mem_slice.write(&[0x48, 0x83, 0xef, operand as u8])    
