@@ -118,3 +118,12 @@ impl From<Program> for IR {
         Self(ir)
     }
 }
+
+impl IntoIterator for IR {
+    type Item = IRInsn;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_vec().into_iter()
+    }
+}
