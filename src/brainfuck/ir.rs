@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::Peekable};
+use std::{cell::RefCell, collections::HashMap, iter::Peekable};
 
 use enum_tag::EnumTag;
 
@@ -20,6 +20,17 @@ pub enum IRInsn {
 }
 
 impl IRInsn {
+    fn machine_code_size(&self) -> u8 {
+        use IRInsn::*;
+
+        match self {
+            IncVal(_) | DecVal(_) => 3,
+            IncPtr(_) | DecPtr(_) => 7,
+            JumpIfZero(_) | JumpIfNonZero(_) => 10,
+            GetChar | PutChar => 28,
+        }
+    }
+
     fn is_collapsible(&self) -> bool {
         use IRInsn::*;
 
@@ -102,13 +113,64 @@ pub trait CollapseIR: Iterator<Item = IRInsn> + Sized {
 impl<I: Iterator<Item = IRInsn>> CollapseIR for I {}
 
 #[derive(Debug)]
-pub struct IR(pub Box<[IRInsn]>);
+pub struct IR(RefCell<Box<[IRInsn]>>);
+
+impl IR {
+    pub fn backpatch_jumps(&self) {
+        let mut jump_table = HashMap::new();
+        let mut fwd_stack = Vec::new();
+
+        self.0
+            .borrow()
+            .iter()
+            .enumerate()
+            .for_each(|(pos, insn)| match insn {
+                IRInsn::JumpIfZero(_) => {
+                    fwd_stack.push(pos);
+                }
+
+                IRInsn::JumpIfNonZero(_) => {
+                    let last_fwd_pos = fwd_stack.pop().unwrap();
+
+                    jump_table.insert(last_fwd_pos, pos);
+                }
+
+                _ => {}
+            });
+
+        for (fwd_pos, bwd_pos) in jump_table {
+            let jmp_rel_offset: i32 = self
+                .0
+                .borrow()
+                .iter()
+                .skip(fwd_pos) // skip to the "[" in question
+                .take(bwd_pos - fwd_pos) // iterate over instructions between "[" and "]"
+                .map(|insn| insn.machine_code_size() as i32) // As machine code, how many bytes is it?
+                .sum();
+
+            let fwd_rel_offset = jmp_rel_offset;
+            let bwd_rel_offset = -(jmp_rel_offset) + 10;
+
+            if let IRInsn::JumpIfZero(ref mut offset) = self.0.borrow_mut()[fwd_pos] {
+                *offset = fwd_rel_offset;
+            } else {
+                unreachable!();
+            }
+
+            if let IRInsn::JumpIfNonZero(ref mut offset) = self.0.borrow_mut()[bwd_pos] {
+                *offset = bwd_rel_offset;
+            } else {
+                unreachable!()
+            }
+        }
+    }
+}
 
 impl From<Program> for IR {
     fn from(prog: Program) -> IR {
         let ir = prog.into_iter().map(|op| op.into()).collapse().collect();
 
-        Self(ir)
+        Self(RefCell::new(ir))
     }
 }
 
@@ -117,6 +179,6 @@ impl IntoIterator for IR {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_vec().into_iter()
+        self.0.into_inner().into_vec().into_iter()
     }
 }
