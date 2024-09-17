@@ -15,11 +15,7 @@ fn main() {
             folded_ir.backpatch_jumps();
             // dbg!(&folded_ir);
 
-            let jitted_program = Jit::eval_ir(folded_ir).unwrap();
-
-            let arr = [0u8; 30_000];
-
-            jitted_program(arr.as_ptr());
+            Jit::eval_ir(folded_ir).unwrap().run();
         } else {
             eprintln!("Failed to open file {}", path);
             process::exit(-1)

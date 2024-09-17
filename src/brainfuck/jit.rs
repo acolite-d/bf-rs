@@ -4,17 +4,44 @@ use super::{
     Eval,
 };
 
-use nix::sys::mman::{mmap_anonymous, MapFlags, ProtFlags};
-use std::{
-    io::Write,
-    num::{NonZero, NonZeroUsize},
-    slice,
-};
+use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
+use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
 
 pub struct Jit;
 
+// The Jit produces JittedFunctions from Brainfuck IR, its a tuple struct
+// with a void pointer, and a size of memory pointed to by pointer (weird slice)
+pub struct JittedFunction(*mut c_void, usize);
+
+impl JittedFunction {
+    pub fn run(&self) {
+        // Converting a pointer of bytes to a function pointer in Rust is, as one would expect,
+        // very unsafe. This requires an intrinsics function changing arbitrary memory objects
+        // called "transmute".
+        let function =
+            unsafe { std::mem::transmute::<*mut c_void, extern "C" fn(*const u8)>(self.0) };
+
+        let byte_arr = [0u8; 30_000];
+
+        // Call the function
+        function(byte_arr.as_ptr())
+    }
+}
+
+// Keeping in touch with Rust's stance on RAII driven design, implemented
+// Drop for the JittedFunction object, which call syscall munmap(2) to
+// relinquish the executable region of memory we requested from Linux
+impl Drop for JittedFunction {
+    fn drop(&mut self) {
+        unsafe {
+            munmap(NonNull::new_unchecked(self.0), self.1)
+                .expect("Failed to release memory back to OS!");
+        }
+    }
+}
+
 impl Eval for Jit {
-    type Output = extern "C" fn(*const u8);
+    type Output = JittedFunction;
 
     fn eval_source(src: Program) -> Result<Self::Output, ()> {
         unimplemented!()
@@ -145,7 +172,8 @@ impl Eval for Jit {
         code.write_all(&[0xc3]).unwrap(); // retq
 
         // Request executable region of memory from operating system using the well-known
-        // mmap Linux syscall (see man pages for mmap). This is a Nix API wrapper around said syscall.
+        // mmap Linux syscall (see man pages for mmap). This is a Nix API wrapper around said syscall,
+        // where anonymous is just a mapping without a file
         let mut exec_mem: &mut [u8] = unsafe {
             let ptr = mmap_anonymous(
                 None,
@@ -160,14 +188,9 @@ impl Eval for Jit {
             slice::from_raw_parts_mut(ptr, code.len())
         };
 
+        // Copy our code inside the dynamically sized vector to the executable memory
         exec_mem.copy_from_slice(code.as_slice());
 
-        // Converting a pointer of bytes to a function pointer in Rust is, as one would expect,
-        // very unsafe. This requires an intrinsics function changing arbitrary memory objects
-        // called "transmute".
-        let compiled_fn =
-            unsafe { std::mem::transmute::<*const u8, Self::Output>(exec_mem.as_ptr()) };
-
-        Ok(compiled_fn)
+        Ok(JittedFunction(exec_mem.as_mut_ptr().cast(), exec_mem.len()))
     }
 }
