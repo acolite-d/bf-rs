@@ -9,19 +9,17 @@ fn main() {
 
     if let Some(path) = env::args().nth(1) {
         if let Ok(source_code) = fs::read_to_string(&path) {
-            // Interpreter::eval_source(Program::new(&source_code)).unwrap();
+            //Interpreter::eval_source(Program::new(&source_code)).unwrap();
 
             let folded_ir: IR = Program::new(&source_code).into();
             folded_ir.backpatch_jumps();
-            dbg!(&folded_ir);
+            // dbg!(&folded_ir);
 
             let jitted_program = Jit::eval_ir(folded_ir).unwrap();
 
             let arr = [0u8; 30_000];
 
             jitted_program(arr.as_ptr());
-
-            dbg!(&arr[0..10]);
         } else {
             eprintln!("Failed to open file {}", path);
             process::exit(-1)

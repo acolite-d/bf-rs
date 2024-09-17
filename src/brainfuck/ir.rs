@@ -149,7 +149,7 @@ impl IR {
                 .sum();
 
             let fwd_rel_offset = jmp_rel_offset;
-            let bwd_rel_offset = -(jmp_rel_offset) + 10;
+            let bwd_rel_offset = -(jmp_rel_offset);
 
             if let IRInsn::JumpIfZero(ref mut offset) = self.0.borrow_mut()[fwd_pos] {
                 *offset = fwd_rel_offset;
