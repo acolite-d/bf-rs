@@ -35,7 +35,7 @@ impl Drop for JittedFunction {
     fn drop(&mut self) {
         unsafe {
             munmap(NonNull::new_unchecked(self.0), self.1)
-                .expect("Failed to release memory back to OS!");
+                .expect("Failed to release memory back to OS!:");
         }
     }
 }
@@ -188,7 +188,7 @@ impl Eval for Jit {
             slice::from_raw_parts_mut(ptr, code.len())
         };
 
-        // Copy our code inside the dynamically sized vector to the executable memory
+        // Copy our code inside the dynamically sized vector to the executable memory region
         exec_mem.copy_from_slice(code.as_slice());
 
         Ok(JittedFunction(exec_mem.as_mut_ptr().cast(), exec_mem.len()))
