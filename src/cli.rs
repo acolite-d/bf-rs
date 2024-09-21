@@ -24,7 +24,7 @@ pub enum Mode {
 impl From<Mode> for OsStr {
     fn from(mode: Mode) -> OsStr {
         match mode {
-            Mode::Interpret => "interpreter".into(),
+            Mode::Interpret => "interpret".into(),
             Mode::Jit => "jit".into(),
         }
     }
@@ -37,7 +37,7 @@ impl ValueEnum for Mode {
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            Mode::Interpret => PossibleValue::new("interpreter").help("Execute via interpreter"),
+            Mode::Interpret => PossibleValue::new("interpret").help("Execute via interpreter"),
             Mode::Jit => {
                 PossibleValue::new("jit").help("Execute via Jit compilation and execution")
             }
