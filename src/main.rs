@@ -20,8 +20,8 @@ fn main() {
 
                 Mode::Jit => {
                     let ir: IR = program.into();
-                    ir.backpatch_jumps();
-                    Jit::eval_ir(ir).unwrap().run();
+                    let compiled_fn = Jit::eval_ir(ir).unwrap();
+                    compiled_fn.run();
                 }
             }
         } else {

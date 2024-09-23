@@ -13,24 +13,13 @@ pub enum IRInsn {
     DecVal(u8) = 2,
     IncPtr(u32) = 3,
     DecPtr(u32) = 4,
-    JumpIfZero(i32) = 5,
-    JumpIfNonZero(i32) = 6,
+    JumpIfZero = 5,
+    JumpIfNonZero = 6,
     GetChar = 7,
     PutChar = 8,
 }
 
 impl IRInsn {
-    fn machine_code_size(&self) -> u8 {
-        use IRInsn::*;
-
-        match self {
-            IncVal(_) | DecVal(_) => 3,
-            IncPtr(_) | DecPtr(_) => 7,
-            JumpIfZero(_) | JumpIfNonZero(_) => 10,
-            GetChar | PutChar => 28,
-        }
-    }
-
     fn is_collapsible(&self) -> bool {
         use IRInsn::*;
 
@@ -64,8 +53,8 @@ impl From<Operator> for IRInsn {
             Operator::DecrementPtr => DecPtr(1),
             Operator::IncrementValue => IncVal(1),
             Operator::DecrementValue => DecVal(1),
-            Operator::JumpIfZero => JumpIfZero(0),
-            Operator::JumpIfNonZero => JumpIfNonZero(0),
+            Operator::JumpIfZero => JumpIfZero,
+            Operator::JumpIfNonZero => JumpIfNonZero,
             Operator::GetChar => GetChar,
             Operator::PutChar => PutChar,
         }
@@ -114,57 +103,6 @@ impl<I: Iterator<Item = IRInsn>> CollapseIR for I {}
 
 #[derive(Debug)]
 pub struct IR(RefCell<Box<[IRInsn]>>);
-
-impl IR {
-    pub fn backpatch_jumps(&self) {
-        let mut jump_table = HashMap::new();
-        let mut fwd_stack = Vec::new();
-
-        self.0
-            .borrow()
-            .iter()
-            .enumerate()
-            .for_each(|(pos, insn)| match insn {
-                IRInsn::JumpIfZero(_) => {
-                    fwd_stack.push(pos);
-                }
-
-                IRInsn::JumpIfNonZero(_) => {
-                    let last_fwd_pos = fwd_stack.pop().unwrap();
-
-                    jump_table.insert(last_fwd_pos, pos);
-                }
-
-                _ => {}
-            });
-
-        for (fwd_pos, bwd_pos) in jump_table {
-            let jmp_rel_offset: i32 = self
-                .0
-                .borrow()
-                .iter()
-                .skip(fwd_pos) // skip to the "[" in question
-                .take(bwd_pos - fwd_pos) // iterate over instructions between "[" and "]"
-                .map(|insn| insn.machine_code_size() as i32) // As machine code, how many bytes is it?
-                .sum();
-
-            let fwd_rel_offset = jmp_rel_offset;
-            let bwd_rel_offset = -(jmp_rel_offset);
-
-            if let IRInsn::JumpIfZero(ref mut offset) = self.0.borrow_mut()[fwd_pos] {
-                *offset = fwd_rel_offset;
-            } else {
-                unreachable!();
-            }
-
-            if let IRInsn::JumpIfNonZero(ref mut offset) = self.0.borrow_mut()[bwd_pos] {
-                *offset = bwd_rel_offset;
-            } else {
-                unreachable!()
-            }
-        }
-    }
-}
 
 impl From<Program> for IR {
     fn from(prog: Program) -> IR {
