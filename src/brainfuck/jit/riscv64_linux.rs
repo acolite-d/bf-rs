@@ -40,6 +40,11 @@ impl Drop for JittedFunction {
     }
 }
 
+struct JumpPairPos {
+    fwd_jmp: usize,
+    bwd_jmp: usize,
+}
+
 impl Eval for Jit {
     type Output = JittedFunction;
 
@@ -49,30 +54,29 @@ impl Eval for Jit {
 
     fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
         let mut code: Vec<u8> = Vec::with_capacity(4096);
+        let mut jump_pair_positions: Vec<JumpPairPos> = vec![];
 
-        // With executable region of memory in hand, iterate over IR instructions, emitting the
-        // correct machine code to the slice for every instruction. Once we have iterated and
-        // emitted all our machine code, exec_mem slice should hold the code to a function.
+        // Iterate over IR instructions, emitting the correct machine code
+        // to the code buffer for every instruction. Once we have iterated and
+        // emitted all our machine code, buffer should be have all instructions to run
         for ir_insn in ir {
             match ir_insn {
                 IRInsn::IncVal(operand) => {
-                    code.write_all(&[0x0, 0x15, 0x05, 0x1b]) // addiw a0,a0,1
-                        .unwrap()
+                    let mut addiw = &[0x0, 0x05, 0x05, 0x1b]; // addiw a0, $0 <12-bit signed immed>
+                    addiw |= (operand as i32); // $0 -> immediate value we want
+                    code.write_all(addiw).unwrap();
                 }
 
                 IRInsn::DecVal(operand) => {
-                    code.write_all(&[0x80, 0x2f, operand]) // subb $<operand>, (%rdi)
-                        .unwrap();
+                    let mut addiw = &[0x0, 0x05, 0x05, 0x1b]; // addiw a0, $0 <12-bit signed immed>
+                    addiw |= -(operand as i32) & 0xff_f0; // $0 -> immediate value we want
+                    code.write_all(addiw).unwrap();
                 }
 
                 IRInsn::IncPtr(operand) => {
-                    let bytecode: Vec<u8> = {
-                        let mut v = vec![0x48, 0x81, 0xc7];
-                        v.extend_from_slice(bytemuck::bytes_of(&operand));
-                        v
-                    }; // addq $<operand>, %rdi
-
-                    code.write_all(bytecode.as_slice()).unwrap();
+                    code.write_all(&[0x0, 0x5, 0x2, 0x83]).unwrap(); // lb t0, (a0)
+                    let mut addiw = &[0x0, 0x05, 0x05, 0x1b];
+                    addiw |= (operand & 0x0f_ff_ff)
                 }
 
                 IRInsn::DecPtr(operand) => {
@@ -85,40 +89,31 @@ impl Eval for Jit {
                     code.write_all(bytecode.as_slice()).unwrap();
                 }
 
-                IRInsn::JumpIfZero(dest_offset) => {
-                    // Compare current pointed to value by loading
-                    // its byte in %al, comparing it with zero.
-                    code.write_all(&[
-                        0x8a, 0x07, // mov %al, byte [rdi]
-                        0x84, 0xc0, // test %al, %al
-                    ])
-                    .unwrap();
+                IRInsn::JumpIfZero => {
+                    // Compare current pointed to value by first loading
+                    // its byte to temp register t0
+                    code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap(); // lb t0, (a0)
 
-                    let jz: Vec<u8> = {
-                        let mut v = vec![0x0f, 0x84];
-                        v.extend_from_slice(bytemuck::bytes_of(&dest_offset));
-                        v
-                    }; // jz <rel32_offset_destination>
+                    jump_pair_positions.push(JumpPairPos {
+                        fwd_jmp: code.len(),
+                        bwd_jmp: 0,
+                    });
 
-                    code.write_all(jz.as_slice()).unwrap();
+                    code.write_all(&[0x0, 0x02, 0x86, 0x63]).unwrap(); // beqz t0, $0
                 }
 
-                IRInsn::JumpIfNonZero(dest_offset) => {
-                    // Compare current pointed to value by loading
-                    // its byte in %al, comparing it with zero.
-                    code.write_all(&[
-                        0x8a, 0x07, // mov %al byte [rdi]
-                        0x84, 0xc0, // test %al, %al
-                    ])
-                    .unwrap();
+                IRInsn::JumpIfNonZero => {
+                    /// Compare current pointed to value by first loading
+                    // its byte to temp register t0
+                    code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap(); // lb t0, (a0)
 
-                    let jnz: Vec<u8> = {
-                        let mut v = vec![0x0f, 0x85];
-                        v.extend_from_slice(bytemuck::bytes_of(&dest_offset));
-                        v
-                    }; // jne <rel32_offset_destination>
+                    jump_pair_positions
+                        .iter_mut()
+                        .rev()
+                        .find(|pair| pair.bwd_jmp == 0)
+                        .map(|pair| pair.bwd_jmp = code.len());
 
-                    code.write_all(jnz.as_slice()).unwrap();
+                    code.write_all(&[0x0, 0x02, 0x94, 0x63]).unwrap(); // bnez t0, $0
                 }
 
                 IRInsn::GetChar => {
@@ -130,17 +125,13 @@ impl Eval for Jit {
                     // buffer = pointer head
                     // length = 1 (single character)
                     code.write_all(&[
-                        // push %rdi
-                        0x57, // mov $0, %rax (syscall number)
-                        0x48, 0xc7, 0xc0, 0x0, 0x0, 0x0, 0x0,
-                        // mov %rdi, %rsi (second argument, buffer pointer)
-                        0x48, 0x89, 0xfe, // mov $0, %rdi (first argument)
-                        0x48, 0xc7, 0xc7, 0x0, 0x0, 0x0, 0x0,
-                        // mov $1, %rdx (third argument)
-                        0x48, 0xc7, 0xc2, 0x01, 0x0, 0x0, 0x0,
-                        // syscall, transfer to kernel
-                        0x0f, 0x05, // pop %rdi
-                        0x5f,
+                        0xfe, 0xa1, 0x3e, 0x23, // sd a0 -4(sp)
+                        0x0, 0x0, 0x5, 0xb7, // lui a1, 0x0 (STDIN)
+                        0x0, 0x5, 0x6, 0x33, // add a2, a0, zero (buffer)
+                        0x0, 0x0, 0x16, 0xb7, // lui a3, 0x1 (length)
+                        0x0, 0x0, 0x5, 0x37, // lui a0, 0x0 (syscall number)
+                        0x0, 0x0, 0x0, 0x73, // ecall (system call)
+                        0xff, 0xc1, 0x35, 0x3, // ld a0, -4(sp)
                     ])
                     .unwrap();
                 }
@@ -150,26 +141,34 @@ impl Eval for Jit {
                     // Writes character from pointer head to STDOUT.
                     // file_descriptor = STOUT = 1
                     // syscall number = 1
-                    // length = 1 (a si ngle character)
+                    // length = 1 (a single character)
+
                     code.write_all(&[
-                        // push %rdi
-                        0x57, // mov $1, %rax (syscall number)
-                        0x48, 0xc7, 0xc0, 0x01, 0x0, 0x0, 0x0,
-                        // mov %rdi, %rsi (second argument, buffer pointer)
-                        0x48, 0x89, 0xfe, // mov $1, %rdi (first argument)
-                        0x48, 0xc7, 0xc7, 0x01, 0x0, 0x0, 0x0,
-                        // mov $1, %rdx (third argument)
-                        0x48, 0xc7, 0xc2, 0x01, 0x0, 0x0, 0x0,
-                        // syscall, transfer to kernel
-                        0x0f, 0x05, // pop %rdi
-                        0x5f,
+                        0xfe, 0xa1, 0x3e, 0x23, // sd a0 -4(sp)
+                        0x0, 0x0, 0x15, 0xb7, // lui a1, 0x1 (STDIN)
+                        0x0, 0x5, 0x6, 0x33, // add a2, a0, zero (buffer)
+                        0x0, 0x0, 0x16, 0xb7, // lui a3, 0x1 (length)
+                        0x0, 0x0, 0x15, 0x37, // lui a0, 0x0 (syscall number)
+                        0x0, 0x0, 0x0, 0x73, // ecall (system call)
+                        0xff, 0xc1, 0x35, 0x3, // ld a0, -4(sp)
                     ])
                     .unwrap();
                 }
             }
         }
 
-        code.write_all(&[0xc3]).unwrap(); // retq
+        code.write_all(&[0x0, 0x0, 0x80, 0x67]).unwrap(); // ret
+
+        jump_pair_positions.into_iter().for_each(|pair| {
+            let fwd_offset = (pair.bwd_jmp - pair.fwd_jmp) as i32;
+            let bwd_offset = -fwd_offset;
+
+            code[pair.fwd_jmp + 2..pair.fwd_jmp + 6]
+                .copy_from_slice(bytemuck::bytes_of(&fwd_offset));
+
+            code[pair.bwd_jmp + 2..pair.bwd_jmp + 6]
+                .copy_from_slice(bytemuck::bytes_of(&bwd_offset))
+        });
 
         // Request executable region of memory from operating system using the well-known
         // mmap Linux syscall (see man pages for mmap). This is a Nix API wrapper around said syscall,
