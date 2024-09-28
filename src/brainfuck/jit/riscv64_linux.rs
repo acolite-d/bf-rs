@@ -7,6 +7,35 @@ use super::{
 use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
 use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
 
+// Bit masks for parts of the immediate 12 bit offset operand for "B" RISC-V instructions
+const IMMED_MASK1: i32 = 0b0100_0000_0000; // 11th bit
+const IMMED_MASK2: i32 = 0b0000_0000_1111; // bits 1-4
+const IMMED_MASK3: i32 = 0b1000_0000_0000; // 12th bit
+const IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
+
+// RISC-V "B" Instruction Format
+// Every "-" is a bit in a 4-byte instruction encoding
+// |    -    | ------ | ----- | ----- | --- | ---- |    -   | ------- |
+// | imm[12] | imm[10:5] | rs2 | rs1 | imm[4:1] | imm[11] | opcode |
+//
+// This function mutates a "B" format instruction with the desired offset given:
+// imm[4:1] + imm[11] and imm[12] + imm[10:5]
+fn encode_b_format_immediate_offset(b_format_insn: &mut i32, offset: i32) {
+    assert!((-4095..4096).contains(&offset)); // +/- 4KB valid range
+    assert!(offset % 2 == 0); // has to be divisible by two
+
+    // offset is encoded as multiples of two, so an offset
+    // of +8 would be encoded as +4, -12 would be -6, so on.
+    let offset_multiple = offset / 2;
+
+    let imm1 = (offset & IMMED_MASK1) >> 8;
+    let imm2 = (offset & IMMED_MASK2) << 8;
+    let imm3 = (offset & IMMED_MASK3) << 20;
+    let imm4 = (offset & IMMED_MASK4) << 20;
+
+    *b_format_insn |= (imm1 | imm2 | imm3 | imm4);
+}
+
 pub struct Jit;
 
 // The Jit produces JittedFunctions from Brainfuck IR, its a tuple struct
@@ -15,7 +44,7 @@ pub struct JittedFunction(*mut c_void, usize);
 
 impl JittedFunction {
     pub fn run(&self) {
-        // Converting a pointer of bytes to a function pointer in Rust is, as one would expect,
+        // Converting any kind of pointer to a function pointer in Rust is, as one would expect,
         // very unsafe. This requires an intrinsics function changing arbitrary memory objects
         // called "transmute".
         let function =
@@ -35,7 +64,7 @@ impl Drop for JittedFunction {
     fn drop(&mut self) {
         unsafe {
             munmap(NonNull::new_unchecked(self.0), self.1)
-                .expect("Failed to release memory back to OS!:");
+                .expect("Failed to release memory back to OS!");
         }
     }
 }
@@ -62,31 +91,51 @@ impl Eval for Jit {
         for ir_insn in ir {
             match ir_insn {
                 IRInsn::IncVal(operand) => {
-                    let mut addiw = &[0x0, 0x05, 0x05, 0x1b]; // addiw a0, $0 <12-bit signed immed>
-                    addiw |= (operand as i32); // $0 -> immediate value we want
-                    code.write_all(addiw).unwrap();
+                    code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap(); // lb t0, (a0)
+
+                    let mut addi = 0x28293; // addi t0, t0, 0x0
+                    addi |= (operand as i32);
+
+                    bytemuck::bytes_of(&addi)
+                        .iter()
+                        .rev()
+                        .for_each(|&b| code.write_all(&[b]).unwrap());
+
+                    code.write_all(&[0x0, 0x55, 0x0, 0x23]).unwrap(); // sb t0, (a0)
                 }
 
                 IRInsn::DecVal(operand) => {
-                    let mut addiw = &[0x0, 0x05, 0x05, 0x1b]; // addiw a0, $0 <12-bit signed immed>
-                    addiw |= -(operand as i32) & 0xff_f0; // $0 -> immediate value we want
-                    code.write_all(addiw).unwrap();
+                    code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap(); // lb t0, (a0)
+
+                    let mut addi = 0x28293; // addi t0, t0, 0x0
+                    addi |= (operand as i32) & 0b1111_1111_1111;
+
+                    bytemuck::bytes_of(&addi)
+                        .iter()
+                        .rev()
+                        .for_each(|&b| code.write_all(&[b]).unwrap());
+
+                    code.write_all(&[0x0, 0x55, 0x0, 0x23]).unwrap(); // sb t0, (a0)
                 }
 
                 IRInsn::IncPtr(operand) => {
-                    code.write_all(&[0x0, 0x5, 0x2, 0x83]).unwrap(); // lb t0, (a0)
-                    let mut addiw = &[0x0, 0x05, 0x05, 0x1b];
-                    addiw |= (operand & 0x0f_ff_ff)
+                    let mut addi = 0x50513; // addi a0, a0, 0x0
+                    addi |= (operand as i32);
+
+                    bytemuck::bytes_of(&addi)
+                        .iter()
+                        .rev()
+                        .for_each(|&b| code.write_all(&[b]).unwrap());
                 }
 
                 IRInsn::DecPtr(operand) => {
-                    let bytecode: Vec<u8> = {
-                        let mut v = vec![0x48, 0x81, 0xef];
-                        v.extend_from_slice(bytemuck::bytes_of(&operand));
-                        v
-                    }; // subq $<operand>, %rdi
+                    let mut addi = 0x50513; // addi a0, a0, 0x0
+                    addi |= (operand as i32) & 0b1111_1111_1111;
 
-                    code.write_all(bytecode.as_slice()).unwrap();
+                    bytemuck::bytes_of(&addi)
+                        .iter()
+                        .rev()
+                        .for_each(|&b| code.write_all(&[b]).unwrap());
                 }
 
                 IRInsn::JumpIfZero => {
@@ -99,7 +148,7 @@ impl Eval for Jit {
                         bwd_jmp: 0,
                     });
 
-                    code.write_all(&[0x0, 0x02, 0x86, 0x63]).unwrap(); // beqz t0, $0
+                    code.write_all(&[0x0, 0x2, 0x80, 0x63]).unwrap(); // beqz t0, 0
                 }
 
                 IRInsn::JumpIfNonZero => {
@@ -111,9 +160,11 @@ impl Eval for Jit {
                         .iter_mut()
                         .rev()
                         .find(|pair| pair.bwd_jmp == 0)
-                        .map(|pair| pair.bwd_jmp = code.len());
+                        .map(|pair| {
+                            pair.bwd_jmp = code.len();
+                        });
 
-                    code.write_all(&[0x0, 0x02, 0x94, 0x63]).unwrap(); // bnez t0, $0
+                    code.write_all(&[0x0, 0x2, 0x90, 0x63]).unwrap(); // bnez t0, 0
                 }
 
                 IRInsn::GetChar => {
@@ -125,13 +176,13 @@ impl Eval for Jit {
                     // buffer = pointer head
                     // length = 1 (single character)
                     code.write_all(&[
-                        0xfe, 0xa1, 0x3e, 0x23, // sd a0 -4(sp)
+                        0xfe, 0xa1, 0x3e, 0x23, // sd a0, -4(sp) (save pointer to stack)
                         0x0, 0x0, 0x5, 0xb7, // lui a1, 0x0 (STDIN)
                         0x0, 0x5, 0x6, 0x33, // add a2, a0, zero (buffer)
                         0x0, 0x0, 0x16, 0xb7, // lui a3, 0x1 (length)
                         0x0, 0x0, 0x5, 0x37, // lui a0, 0x0 (syscall number)
                         0x0, 0x0, 0x0, 0x73, // ecall (system call)
-                        0xff, 0xc1, 0x35, 0x3, // ld a0, -4(sp)
+                        0xff, 0xc1, 0x35, 0x3, // ld a0, -4(sp) (load it back after syscall)
                     ])
                     .unwrap();
                 }
@@ -142,15 +193,14 @@ impl Eval for Jit {
                     // file_descriptor = STOUT = 1
                     // syscall number = 1
                     // length = 1 (a single character)
-
                     code.write_all(&[
-                        0xfe, 0xa1, 0x3e, 0x23, // sd a0 -4(sp)
+                        0xfe, 0xa1, 0x3e, 0x23, // sd a0, -4(sp) (save our pointer to stack)
                         0x0, 0x0, 0x15, 0xb7, // lui a1, 0x1 (STDIN)
                         0x0, 0x5, 0x6, 0x33, // add a2, a0, zero (buffer)
                         0x0, 0x0, 0x16, 0xb7, // lui a3, 0x1 (length)
                         0x0, 0x0, 0x15, 0x37, // lui a0, 0x0 (syscall number)
                         0x0, 0x0, 0x0, 0x73, // ecall (system call)
-                        0xff, 0xc1, 0x35, 0x3, // ld a0, -4(sp)
+                        0xff, 0xc1, 0x35, 0x3, // ld a0, -4(sp) (load it back after syscall)
                     ])
                     .unwrap();
                 }
@@ -163,11 +213,15 @@ impl Eval for Jit {
             let fwd_offset = (pair.bwd_jmp - pair.fwd_jmp) as i32;
             let bwd_offset = -fwd_offset;
 
-            code[pair.fwd_jmp + 2..pair.fwd_jmp + 6]
-                .copy_from_slice(bytemuck::bytes_of(&fwd_offset));
+            encode_b_format_immediate_offset(
+                bytemuck::from_bytes_mut(&mut code[pair.fwd_jmp..pair.fwd_jmp + 4]),
+                fwd_offset,
+            );
 
-            code[pair.bwd_jmp + 2..pair.bwd_jmp + 6]
-                .copy_from_slice(bytemuck::bytes_of(&bwd_offset))
+            encode_b_format_immediate_offset(
+                bytemuck::from_bytes_mut(&mut code[pair.bwd_jmp..pair.bwd_jmp + 4]),
+                bwd_offset,
+            );
         });
 
         // Request executable region of memory from operating system using the well-known
