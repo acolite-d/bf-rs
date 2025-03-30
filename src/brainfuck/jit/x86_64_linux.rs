@@ -19,12 +19,12 @@ impl JittedFunction {
         // very unsafe. This requires an intrinsics function changing arbitrary memory objects
         // called "transmute".
         let function =
-            unsafe { std::mem::transmute::<*mut c_void, extern "C" fn(*const u8)>(self.0) };
+            unsafe { std::mem::transmute::<*mut c_void, extern "C" fn(*mut u8)>(self.0) };
 
-        let byte_arr = [0u8; 30_000];
+        let mut byte_arr = [0u8; 30_000];
 
         // Call the function
-        function(byte_arr.as_ptr())
+        function(byte_arr.as_mut_ptr())
     }
 }
 

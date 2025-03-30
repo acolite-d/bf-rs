@@ -3,9 +3,17 @@ use super::{
     program::Program,
     Eval,
 };
+use windows::Win32::System::Memory::{self, VirtualAlloc};
+use windows::Win32::System::Console;
+use windows::Win32::Foundation::HANDLE;
+use windows::Wdk::System::SystemServices::KeInvalidateAllCaches;
 
-use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
-use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
+use std::{ffi::{c_void, c_int, c_ulong}, io::Write, num::NonZero, ptr::NonNull, slice};
+
+extern "C" { 
+    fn putchar(c: c_int) -> c_int;
+    fn getchar() -> c_int;
+}
 
 pub struct Jit;
 
@@ -19,12 +27,12 @@ impl JittedFunction {
         // very unsafe. This requires an intrinsics function changing arbitrary memory objects
         // called "transmute".
         let function =
-            unsafe { std::mem::transmute::<*mut c_void, extern "C" fn(*const u8)>(self.0) };
+            unsafe { std::mem::transmute::<*mut c_void, extern "C" fn(*mut u8)>(self.0) };
 
-        let byte_arr = [0u8; 30_000];
+        let mut mem = [0u8; 30_000];
 
         // Call the function
-        function(byte_arr.as_ptr())
+        unsafe { function(mem.as_mut_ptr()) }
     }
 }
 
@@ -34,8 +42,8 @@ impl JittedFunction {
 impl Drop for JittedFunction {
     fn drop(&mut self) {
         unsafe {
-            munmap(NonNull::new_unchecked(self.0), self.1)
-                .expect("Failed to release memory back to OS!:");
+            Memory::VirtualFree(self.0, self.1, Memory::MEM_DECOMMIT)
+                .expect("Should be able to release memory back to OS");
         }
     }
 }
@@ -56,46 +64,43 @@ impl Eval for Jit {
         let mut code: Vec<u8> = Vec::with_capacity(4096);
         let mut jump_pair_positions: Vec<JumpPairPos> = vec![];
 
+        // Store these functions in registers so I can call them
+        // as needed
+        let getchar_addr = getchar as usize;
+        let putchar_addr = putchar as usize;
+
         // Iterate over IR instructions, emitting the correct machine code
         // to the code buffer for every instruction. Once we have iterated and
         // emitted all our machine code, buffer should be have all instructions to run
         for ir_insn in ir {
             match ir_insn {
                 IRInsn::IncVal(operand) => {
-                    code.write_all(&[0x80, 0x07, operand]) // addb $<operand>, (%rdi)
+                    code.write_all(&[0x80, 0x01, operand]) // addb $<operand>, (%rcx)
                         .unwrap();
                 }
 
                 IRInsn::DecVal(operand) => {
-                    code.write_all(&[0x80, 0x2f, operand]) // subb $<operand>, (%rdi)
+                    code.write_all(&[0x80, 0x29, operand]) // subb $<operand>, (%rcx)
                         .unwrap();
                 }
 
                 IRInsn::IncPtr(operand) => {
-                    let bytecode: Vec<u8> = {
-                        let mut v = vec![0x48, 0x81, 0xc7];
-                        v.extend_from_slice(bytemuck::bytes_of(&operand));
-                        v
-                    }; // addq $<operand>, %rdi
-
-                    code.write_all(bytecode.as_slice()).unwrap();
+                    // addq $<operand>, %rcx
+                    code.write_all(&[0x48, 0x81, 0xc1]).unwrap();
+                    code.write_all(bytemuck::bytes_of(&operand)).unwrap()
                 }
 
                 IRInsn::DecPtr(operand) => {
-                    let bytecode: Vec<u8> = {
-                        let mut v = vec![0x48, 0x81, 0xef];
-                        v.extend_from_slice(bytemuck::bytes_of(&operand));
-                        v
-                    }; // subq $<operand>, %rdi
-
-                    code.write_all(bytecode.as_slice()).unwrap();
+                    // subq $<operand>, %rcx
+                    code.write_all(&[0x48, 0x81, 0xe9]).unwrap();
+                    code.write_all(bytemuck::bytes_of(&operand)).unwrap();
                 }
 
                 IRInsn::JumpIfZero => {
                     /// Compare current pointed to value by loading
                     // its byte in %al, comparing it with zero.
                     code.write_all(&[
-                        0x8a, 0x07, // mov %al byte [rdi]
+                        0x8a, 0x01, // mov %al byte [rcx]
                         0x84, 0xc0, // test %al, %al
                     ])
                     .unwrap();
@@ -113,7 +118,7 @@ impl Eval for Jit {
                     // its byte in %al, comparing it with zero.
                     code.write_all(&[
                         // mov %al byte [rdi]
-                        0x8a, 0x07, // test %al, %al
+                        0x8a, 0x01, // test %al, %al
                         0x84, 0xc0, // jnz <0 offset to be patched later>
                     ])
                     .unwrap();
@@ -128,50 +133,34 @@ impl Eval for Jit {
                 }
 
                 IRInsn::GetChar => {
-                    // A inlined read(2) syscall, read(file_descriptor, buffer, length)
-                    // Most of this is putting the right values in registers before making
-                    // transfering control to kernel to process read(2)
-                    // syscall_number = 0
-                    // file_descriptor = STDIN = 0,
-                    // buffer = pointer head
-                    // length = 1 (single character)
+                    // movabsq $<addr of getchar>, %r9
+                    code.write_all(&[0x49, 0xb9]).unwrap();
+                    code.write_all(bytemuck::bytes_of(&getchar_addr)).unwrap();
+
                     code.write_all(&[
-                        // push %rdi
-                        0x57, // mov $0, %rax (syscall number)
-                        0x48, 0xc7, 0xc0, 0x0, 0x0, 0x0, 0x0,
-                        // mov %rdi, %rsi (second argument, buffer pointer)
-                        0x48, 0x89, 0xfe, // mov $0, %rdi (first argument)
-                        0x48, 0xc7, 0xc7, 0x0, 0x0, 0x0, 0x0,
-                        // mov $1, %rdx (third argument)
-                        0x48, 0xc7, 0xc2, 0x01, 0x0, 0x0, 0x0,
-                        // syscall, transfer to kernel
-                        0x0f, 0x05, // pop %rdi
-                        0x5f,
-                    ])
-                    .unwrap();
+                        // call *%r9 (getchar)
+                        0x41, 0xff, 0xd1,
+                        // movb %al, (%rcx)
+                        0x88, 0x01,
+                    ]).unwrap();
                 }
 
                 IRInsn::PutChar => {
-                    // A inlined write(2) syscall, write(file_descriptor, buffer, length)
-                    // Writes character from pointer head to STDOUT.
-                    // file_descriptor = STOUT = 1
-                    // syscall number = 1
-                    // length = 1 (a si ngle character)
+                    // movabsq $<addr of getchar>, %r9
+                    code.write_all(&[0x49, 0xb9]).unwrap();
+                    code.write_all(bytemuck::bytes_of(&putchar_addr)).unwrap();
+
                     code.write_all(&[
-                        // push %rdi
-                        0x57, // mov $1, %rax (syscall number)
-                        0x48, 0xc7, 0xc0, 0x01, 0x0, 0x0, 0x0,
-                        // mov %rdi, %rsi (second argument, buffer pointer)
-                        0x48, 0x89, 0xfe, // mov $1, %rdi (first argument)
-                        0x48, 0xc7, 0xc7, 0x01, 0x0, 0x0, 0x0,
-                        // mov $1, %rdx (third argument)
-                        0x48, 0xc7, 0xc2, 0x01, 0x0, 0x0, 0x0,
-                        // syscall, transfer to kernel
-                        0x0f, 0x05, // pop %rdi
-                        0x5f,
-                    ])
-                    .unwrap();
-                }
+                        // push %rcx
+                        0x51,
+                        // mov (%rcx), %rcx
+                        0x48, 0x8b, 0x09,
+                        // call *%r10 (putchar)
+                        0x41, 0xff, 0xd1,
+                        // pop %rcx
+                        0x59
+                    ]).unwrap();
+               }
             }
         }
 
@@ -187,22 +176,27 @@ impl Eval for Jit {
             code[pair.bwd_jmp + 2..pair.bwd_jmp + 6]
                 .copy_from_slice(bytemuck::bytes_of(&bwd_offset))
         });
-
-        // Request executable region of memory from operating system using the well-known
-        // mmap Linux syscall (see man pages for mmap). This is a Nix API wrapper around said syscall,
-        // where anonymous is just a mapping without a file
+        
         let mut exec_mem: &mut [u8] = unsafe {
-            let ptr = mmap_anonymous(
+            let ptr = Memory::VirtualAlloc(
                 None,
-                NonZero::new_unchecked(code.len()),
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
-                MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
-            )
-            .expect("Failed to get executable memory from OS for JIT compilation!")
-            .as_ptr()
-            .cast();
+                code.len(),
+                Memory::MEM_COMMIT,
+                Memory::PAGE_READWRITE,
+            );
+            
+            let mut _oldflags = Memory::PAGE_PROTECTION_FLAGS(0);
 
-            slice::from_raw_parts_mut(ptr, code.len())
+            Memory::VirtualProtect(
+                ptr,
+                code.len(),
+                Memory::PAGE_EXECUTE_READWRITE,
+                &mut _oldflags as *mut _,
+            )
+            .expect("Should be able to enable memory to be executable");
+
+            
+            slice::from_raw_parts_mut(ptr.cast(), code.len())
         };
 
         // Copy our code inside the dynamically sized vector to the executable memory region
