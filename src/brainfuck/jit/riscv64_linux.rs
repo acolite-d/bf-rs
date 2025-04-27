@@ -8,10 +8,10 @@ use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
 use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
 
 // Bit masks for parts of the immediate 12 bit offset operand for "B" RISC-V instructions
-const IMMED_MASK1: u32 = 0b0100_0000_0000; // 11th bit
-const IMMED_MASK2: u32 = 0b0000_0000_1111; // bits 1-4
-const IMMED_MASK3: u32 = 0b1000_0000_0000; // 12th bit
-const IMMED_MASK4: u32 = 0b0011_1111_0000; // bits 5-10
+const IMMED_MASK1: i32 = 0b0100_0000_0000; // 11th bit
+const IMMED_MASK2: i32 = 0b0000_0000_1111; // bits 1-4
+const IMMED_MASK3: i32 = 0b1000_0000_0000; // 12th bit
+const IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
 
 // RISC-V "B" Instruction Format
 // Every "-" is a bit in a 4-byte instruction encoding
