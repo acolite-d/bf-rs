@@ -20,13 +20,18 @@ const IMMED_MASK4: u32 = 0b0011_1111_0000; // bits 5-10
 //
 // This function mutates a "B" format Instructionruction with the desired offset given:
 // imm[4:1] + imm[11] and imm[12] + imm[10:5]
-fn encode_b_format_immediate_offset(b_format_insn: &mut u32, offset: u32) {
-    assert!((0..4096).contains(&offset as i32)); // +/- 4KB valid range
+fn encode_b_format_immediate_offset(b_format_insn: &mut i32, mut offset: i32) {
+    assert!((-4096..4095).contains(&offset)); // +/- 4KB valid range
     assert!(offset % 2 == 0); // has to be divisible by two
 
     // offset is encoded as multiples of two, so an offset
     // of +8 would be encoded as +4, -12 would be -6, so on.
     let offset_multiple = offset / 2;
+
+    // If the offset is negative, keep only the lower 12 bit
+    if offset < 0 {
+        offset &= 0x00000FFF;
+    }
 
     let imm1 = (offset & IMMED_MASK1) >> 4;
     let imm2 = (offset & IMMED_MASK2) << 25;
@@ -91,22 +96,21 @@ impl Eval for Jit {
         for ir_insn in ir {
             match ir_insn {
                 IRInsn::IncVal(operand) => {
-                     // lb t0, a0
+                    // lb t0, a0
                     code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap();
 
-                    let add_insn: i32 0x93_82_02_00 | (operand as i32);
+                    let add_insn: i32 = 0x93_82_02_00 | (operand as i32);
                     code.write_all(bytemuck::bytes_of(add_insn));
 
                     // sb t0, a0
                     code.write_all(&[0x0, 0x55, 0x00, 0x23]).unwrap();
-
                 }
 
                 IRInsn::DecVal(operand) => {
                     // lb t0, a0
                     code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap();
 
-                    let add_insn: i32 0x93_82_02_00 | ((operand as i32) | 0x00000FFF);
+                    let add_insn: i32 = 0x93_82_02_00 | ((operand as i32) & 0x00000FFF);
                     code.write_all(bytemuck::bytes_of(add_insn));
 
                     // sb t0, a0
@@ -119,7 +123,7 @@ impl Eval for Jit {
                 }
 
                 IRInsn::DecPtr(operand) => {
-                    let add_insn: i32 = 0x13_05_05_00 | ((operand as i32) | 0x00000FFF);
+                    let add_insn: i32 = 0x13_05_05_00 | ((operand as i32) & 0x00000FFF);
                     code.write_all(bytemuck::bytes_of(add_insn));
                 }
 
@@ -195,7 +199,8 @@ impl Eval for Jit {
         code.write_all(&[0x0, 0x0, 0x80, 0x67]).unwrap(); // ret
 
         jump_pair_positions.into_iter().for_each(|pair| {
-            let fwd_offset = (pair.bwd_jmp - pair.fwd_jmp) as u32;
+            let fwd_offset = (pair.bwd_jmp - pair.fwd_jmp) as i32;
+            let bwd_offset = -fwd_offset;
 
             encode_b_format_immediate_offset(
                 bytemuck::from_bytes_mut(&mut code[pair.fwd_jmp..pair.fwd_jmp + 4]),
