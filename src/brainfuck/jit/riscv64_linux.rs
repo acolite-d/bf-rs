@@ -100,7 +100,7 @@ impl Eval for Jit {
                     code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap();
 
                     let add_insn: i32 = 0x93_82_02_00 | (operand as i32);
-                    code.write_all(bytemuck::bytes_of(add_insn));
+                    code.write_all(bytemuck::bytes_of(&add_insn));
 
                     // sb t0, a0
                     code.write_all(&[0x0, 0x55, 0x00, 0x23]).unwrap();
@@ -111,7 +111,7 @@ impl Eval for Jit {
                     code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap();
 
                     let add_insn: i32 = 0x93_82_02_00 | ((operand as i32) & 0x00000FFF);
-                    code.write_all(bytemuck::bytes_of(add_insn));
+                    code.write_all(bytemuck::bytes_of(&add_insn));
 
                     // sb t0, a0
                     code.write_all(&[0x0, 0x55, 0x00, 0x23]).unwrap();
@@ -119,12 +119,12 @@ impl Eval for Jit {
 
                 IRInsn::IncPtr(operand) => {
                     let add_insn: i32 = 0x13_05_05_00 | (operand as i32);
-                    code.write_all(bytemuck::bytes_of(add_insn));
+                    code.write_all(bytemuck::bytes_of(&add_insn));
                 }
 
                 IRInsn::DecPtr(operand) => {
                     let add_insn: i32 = 0x13_05_05_00 | ((operand as i32) & 0x00000FFF);
-                    code.write_all(bytemuck::bytes_of(add_insn));
+                    code.write_all(bytemuck::bytes_of(&add_insn));
                 }
 
                 IRInsn::JumpIfZero => {
