@@ -5,4 +5,6 @@ include!("x86_64_windows.rs");
 include!("x86_64_linux.rs");
 
 #[cfg(all(target_arch = "riscv64", target_os = "linux"))]
-include!("riscv64_linux.rs");
+include!("riscv64g_linux.rs");
+
+// #[cfg(all(target_arch = "riscv64", target_os = "linux", feature = "compress"))]
