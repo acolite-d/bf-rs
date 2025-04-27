@@ -99,7 +99,7 @@ impl Eval for Jit {
                     // lb t0, a0
                     code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap();
 
-                    let add_insn: i32 = 0x93_82_02_00 | (operand as i32);
+                    let add_insn: i32 = 0x93_82_02_00u32 as i32 | (operand as i32);
                     code.write_all(bytemuck::bytes_of(&add_insn));
 
                     // sb t0, a0
@@ -110,7 +110,7 @@ impl Eval for Jit {
                     // lb t0, a0
                     code.write_all(&[0x0, 0x05, 0x02, 0x83]).unwrap();
 
-                    let add_insn: i32 = 0x93_82_02_00 | ((operand as i32) & 0x00000FFF);
+                    let add_insn: i32 = 0x93_82_02_00u32 as i32 | ((operand as i32) & 0x00000FFF);
                     code.write_all(bytemuck::bytes_of(&add_insn));
 
                     // sb t0, a0
