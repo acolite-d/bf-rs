@@ -15,7 +15,9 @@ fn main() {
 
             match cli.mode {
                 Mode::Interpret => {
-                    Interpreter::eval_source(program).unwrap();
+                    // Interpreter::eval_source(program).unwrap();
+                    let ir: IR = program.into();
+                    Interpreter::eval_ir(ir).unwrap();
                 }
 
                 Mode::Jit => {

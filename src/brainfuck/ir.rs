@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, iter::Peekable};
+use std::{
+    cell::{Ref, RefCell},
+    collections::HashMap,
+    iter::Peekable,
+    ops::Deref,
+};
 
 use enum_tag::EnumTag;
 
@@ -6,7 +11,7 @@ use super::program::{Operator, Program};
 
 // Inspiration from Tsoding, https://www.youtube.com/watch?v=mbFY3Rwv7XM
 // Same IR really.
-#[derive(EnumTag, Debug, Clone, PartialEq, Eq)]
+#[derive(EnumTag, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum IRInsn {
     IncVal(u8) = 1,
@@ -102,13 +107,46 @@ pub trait CollapseIR: Iterator<Item = IRInsn> + Sized {
 impl<I: Iterator<Item = IRInsn>> CollapseIR for I {}
 
 #[derive(Debug)]
-pub struct IR(RefCell<Box<[IRInsn]>>);
+pub struct IR {
+    code: RefCell<Box<[IRInsn]>>,
+    pub fwd_jump_table: HashMap<usize, usize>,
+    pub bwd_jump_table: HashMap<usize, usize>,
+}
+
+impl IR {
+    pub fn code(&self) -> Ref<Box<[IRInsn]>> {
+        self.code.borrow()
+    }
+}
 
 impl From<Program> for IR {
     fn from(prog: Program) -> IR {
-        let ir = prog.into_iter().map(|op| op.into()).collapse().collect();
+        let ir: Box<[IRInsn]> = prog.into_iter().map(|op| op.into()).collapse().collect();
 
-        Self(RefCell::new(ir))
+        let mut fwd_jump_table: HashMap<usize, usize> = HashMap::new();
+        let mut bwd_jump_table: HashMap<usize, usize> = HashMap::new();
+
+        let mut jump_stack = vec![];
+
+        ir.iter()
+            .copied()
+            .enumerate()
+            .for_each(|(offset, insn)| match insn {
+                IRInsn::JumpIfZero => jump_stack.push(offset),
+                IRInsn::JumpIfNonZero => {
+                    let (fwd_dst, bwd_dst) = (jump_stack.pop().unwrap(), offset);
+                    fwd_jump_table.insert(fwd_dst, bwd_dst);
+                    bwd_jump_table.insert(bwd_dst, fwd_dst);
+                }
+
+                _ => {}
+            });
+
+        Self {
+            code: RefCell::new(ir),
+            fwd_jump_table,
+            bwd_jump_table,
+        }
     }
 }
 
@@ -117,6 +155,6 @@ impl IntoIterator for IR {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_inner().into_vec().into_iter()
+        self.code.into_inner().into_vec().into_iter()
     }
 }

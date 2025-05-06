@@ -1,5 +1,5 @@
 use super::{
-    ir::IR,
+    ir::{IRInsn, IR},
     program::{Operator, Program},
     Eval,
 };
@@ -66,10 +66,60 @@ impl Eval for Interpreter {
             ip += 1;
         }
 
+        if (mem.iter().copied().find(|n| *n != 0).is_none()) {
+            panic!("We didn't write to tape!");
+        }
+
         Ok(())
     }
 
     fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
-        unimplemented!()
+        let mut mem = [0u8; 30_000];
+
+        let mut mem_ptr = 0usize;
+        let mut ip = 0usize;
+
+        let code = ir.code();
+
+        while ip < code.len() {
+            match code[ip] {
+                IRInsn::IncPtr(num) => mem_ptr += num as usize,
+
+                IRInsn::DecPtr(num) => mem_ptr -= num as usize,
+
+                IRInsn::IncVal(num) => mem[mem_ptr] = mem[mem_ptr].wrapping_add(num),
+
+                IRInsn::DecVal(num) => mem[mem_ptr] = mem[mem_ptr].wrapping_sub(num),
+
+                IRInsn::JumpIfZero => {
+                    if mem[mem_ptr] == 0 {
+                        ip = ir.fwd_jump_table[&ip];
+                    }
+                }
+
+                IRInsn::JumpIfNonZero => {
+                    if mem[mem_ptr] != 0 {
+                        ip = ir.bwd_jump_table[&ip];
+                    }
+                }
+
+                IRInsn::GetChar => unsafe {
+                    mem[mem_ptr] = getchar() as u8;
+                },
+
+                IRInsn::PutChar => unsafe {
+                    putchar(mem[mem_ptr] as c_int);
+                },
+            }
+
+            // Don't forget to increment to next instruction
+            ip += 1;
+        }
+
+        if (mem.iter().copied().find(|n| *n != 0).is_none()) {
+            panic!("We didn't write to tape!");
+        }
+
+        Ok(())
     }
 }
