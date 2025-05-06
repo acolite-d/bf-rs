@@ -66,10 +66,6 @@ impl Eval for Interpreter {
             ip += 1;
         }
 
-        if (mem.iter().copied().find(|n| *n != 0).is_none()) {
-            panic!("We didn't write to tape!");
-        }
-
         Ok(())
     }
 
@@ -114,10 +110,6 @@ impl Eval for Interpreter {
 
             // Don't forget to increment to next instruction
             ip += 1;
-        }
-
-        if (mem.iter().copied().find(|n| *n != 0).is_none()) {
-            panic!("We didn't write to tape!");
         }
 
         Ok(())
