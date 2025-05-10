@@ -5,7 +5,7 @@ use super::{
 };
 
 use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
-use std::{ops::RangeInclusive, ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
+use std::{ffi::c_void, io::Write, num::NonZero, ops::RangeInclusive, ptr::NonNull, slice};
 
 // Important Limits for RISC-V
 // addi (add immediate) instruction encodes a signed 12-bit number
@@ -17,10 +17,16 @@ const I_FORMAT_IMMED_RANGE: RangeInclusive<i32> = (-2048..=2047);
 const B_FORMAT_IMMED_RANGE: RangeInclusive<i32> = (-4096..=4097);
 
 // Bit masks for parts of the immediate 12 bit offset operand for "B" RISC-V instructions
-const IMMED_MASK1: i32 = 0b0100_0000_0000; // 11 bit
-const IMMED_MASK2: i32 = 0b0000_0000_1111; // bits 1-4
-const IMMED_MASK3: i32 = 0b1000_0000_0000; // 12 bit
-const IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
+const B_IMMED_MASK1: i32 = 0b0100_0000_0000; // 11 bit
+const B_IMMED_MASK2: i32 = 0b0000_0000_1111; // bits 1-4
+const B_IMMED_MASK3: i32 = 0b1000_0000_0000; // 12 bit
+const B_IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
+
+// Bit masks for the "U" format, for unconditional jumps
+const U_IMMED_MASK1: i32 = 0b0000_0000_0011_1111_1111; // bits 1-10
+const U_IMMED_MASK2: i32 = 0b0000_0000_0100_0000_0000; // 11th bit
+const U_IMMED_MASK3: i32 = 0b0111_1111_1000_0000_0000; // bits 12-19
+const U_IMMED_MASK4: i32 = 0b1000_0000_0000_0000_0000; // 20th bit
 
 // RISC-V "B" Instruction Format
 // Every "-" is a bit in a 4-byte instruction encoding
@@ -29,8 +35,8 @@ const IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
 //
 // This function mutates a "B" format Instructionruction with the desired offset given:
 // imm[4:1] + imm[11] and imm[12] + imm[10:5]
-fn encode_b_format_immediate_offset(b_format_insn: &mut i32, mut offset: i32) {
-    assert!((-4096..4095).contains(&offset)); // +/- 4KB valid range
+fn encode_b_format_immediate_offset(b_format_insn: &mut i32, offset: i32) {
+    assert!((-4096..4096).contains(&offset)); // +/- 4KB valid range
     assert!(offset % 2 == 0); // has to be divisible by two
 
     // offset is encoded as multiples of two, so an offset
@@ -38,16 +44,31 @@ fn encode_b_format_immediate_offset(b_format_insn: &mut i32, mut offset: i32) {
     // Also, we throw away the least significant bit, since
     // it is asssumed to be zero given we can only branch on
     // multiples of two
-    let offset_multiple = offset / 2;
+    let offset_multiple = offset >> 1;
 
-    let imm1 = (offset_multiple & IMMED_MASK1) >> 3;
-    let imm2 = (offset_multiple & IMMED_MASK2) << 8;
-    let imm3 = (offset_multiple & IMMED_MASK3) << 20;
-    let imm4 = (offset_multiple & IMMED_MASK4) << 21;
+    let imm1 = (offset_multiple & B_IMMED_MASK1) >> 3;
+    let imm2 = (offset_multiple & B_IMMED_MASK2) << 8;
+    let imm3 = (offset_multiple & B_IMMED_MASK3) << 20;
+    let imm4 = (offset_multiple & B_IMMED_MASK4) << 21;
 
     let imm = imm1 | imm2 | imm3 | imm4;
 
     *b_format_insn |= imm;
+}
+
+fn encode_u_format_immediate_offset(u_format_insn: &mut i32, offset: i32) {
+    assert!((-1048576..1048576).contains(offset));
+    assert!(offset % 2 == 0);
+
+    let offset_multiple = offset >> 1;
+
+    let imm1 = (offset_multiple & U_IMMED_MASK1) << 21;
+    let imm2 = (offset_multiple & U_IMMED_MASK2) << 10;
+    let imm3 = (offset_multiple & U_IMMED_MASK3) << 1;
+    let imm4 = (offset_multiple & U_IMMED_MASK4) << 12;
+
+    let imm = imm1 | imm2 | imm3 | imm4;
+    *u_format_insn |= imm;
 }
 
 pub struct Jit;
@@ -135,47 +156,47 @@ impl Eval for Jit {
                     // parts of the tape, which is 30,000 bytes in length. The immediate
                     // can only encode a 12-bit sign extended value (-2048..2047)
 
- //                   if A_FORMAT_IMMED_RANGE.contains(&operand) {
-			let sign_ext12: i32 = (operand as i32) << 20;
-                        let add_insn: i32 = 0x00_05_05_13 | sign_ext12;
-                        code.write_all(bytemuck::bytes_of(&add_insn));
-//                    } else {
-//                        let adds_needed = operand / (ADDI_IMMEDIATE_MAX as u32);
-//                        let rem = operand % (ADDI_IMMEDIATE_MAX as u32);
-//                        
-//                        let max_addi: i32 = 0x00_05_05_13 | (ADDI_IMMEDIATE_MAX << 20);
-//                        
-//                        for _ in (0..adds_needed) {
-//                            code.write_all(bytemuck::bytes_of(&max_addi)).unwrap();
-//                        }
-//
-//                        if rem > 0 {
-//                            let final_addi: i32 = 0x00_05_05_13 | (rem << 20);
-//                            code.write_all(bytemuck::bytes_of(&final_addi)).unwrap();
-//                        }
+                    //                   if A_FORMAT_IMMED_RANGE.contains(&operand) {
+                    let sign_ext12: i32 = (operand as i32) << 20;
+                    let add_insn: i32 = 0x00_05_05_13 | sign_ext12;
+                    code.write_all(bytemuck::bytes_of(&add_insn));
+                    //                    } else {
+                    //                        let adds_needed = operand / (ADDI_IMMEDIATE_MAX as u32);
+                    //                        let rem = operand % (ADDI_IMMEDIATE_MAX as u32);
+                    //
+                    //                        let max_addi: i32 = 0x00_05_05_13 | (ADDI_IMMEDIATE_MAX << 20);
+                    //
+                    //                        for _ in (0..adds_needed) {
+                    //                            code.write_all(bytemuck::bytes_of(&max_addi)).unwrap();
+                    //                        }
+                    //
+                    //                        if rem > 0 {
+                    //                            let final_addi: i32 = 0x00_05_05_13 | (rem << 20);
+                    //                            code.write_all(bytemuck::bytes_of(&final_addi)).unwrap();
+                    //                        }
                     // }
                 }
 
                 IRInsn::DecPtr(operand) => {
                     // if A_FORMAT_IMMED_RANGE.contains(&operand) {
-                        // addi a0, -<operand>
-                        let sign_ext12 = -(operand as i32) << 20;
-                        let add_insn: i32 = 0x00_05_05_13 | sign_ext12;
-                        code.write_all(bytemuck::bytes_of(&add_insn));
-//                    } else {
-//                        let adds_needed = operand / (ADDI_IMMEDIATE_MAX as u32);
-//                        let rem = operand % (ADDI_IMMEDIATE_MAX as u32);
-//                        
-//                        let max_addi: i32 = 0x00_05_05_13 | (I_FORMAT_IMMED_RANGE.start << 20);
-//                        
-//                        for _ in (0..adds_needed) {
-//                            code.write_all(bytemuck::bytes_of(&max_addi)).unwrap();
-//                        }
-//
-//                        if rem > 0 {
-//                            let final_addi: i32 = 0x00_05_05_13 | (rem << 20);
-//                            code.write_all(bytemuck::bytes_of(&final_addi)).unwrap();
-//                        }
+                    // addi a0, -<operand>
+                    let sign_ext12 = -(operand as i32) << 20;
+                    let add_insn: i32 = 0x00_05_05_13 | sign_ext12;
+                    code.write_all(bytemuck::bytes_of(&add_insn));
+                    //                    } else {
+                    //                        let adds_needed = operand / (ADDI_IMMEDIATE_MAX as u32);
+                    //                        let rem = operand % (ADDI_IMMEDIATE_MAX as u32);
+                    //
+                    //                        let max_addi: i32 = 0x00_05_05_13 | (I_FORMAT_IMMED_RANGE.start << 20);
+                    //
+                    //                        for _ in (0..adds_needed) {
+                    //                            code.write_all(bytemuck::bytes_of(&max_addi)).unwrap();
+                    //                        }
+                    //
+                    //                        if rem > 0 {
+                    //                            let final_addi: i32 = 0x00_05_05_13 | (rem << 20);
+                    //                            code.write_all(bytemuck::bytes_of(&final_addi)).unwrap();
+                    //                        }
                     //}
                 }
 
@@ -184,18 +205,24 @@ impl Eval for Jit {
                     // its byte to temp register t0
 
                     // lb t0, (a0)
-                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap(); 
+                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap();
+
+                    // bnez t0, .+8
+                    code.write_all(&[0x63, 0x94, 0x02, 0x0]).unwrap();
 
                     // Record where this forward jump is, back patch to its destination later
                     jump_pair_positions.push(JumpPairPos {
                         fwd_jmp: code.len(),
                         bwd_jmp: 0,
                     });
-                    
+
+                    // j . (value to be written later)
+                    code.write_all(&[0x6f, 0x0, 0x0, 0x0]).unwrap();
+
                     // Compare the temp register with loaded value with zero register branch if
                     // equal. The destination is to be backpatched later
-                    // beqz t0, x0, 0 (beq t0, x0 (zero register), 0) 
-                    code.write_all(&[0x63, 0x80, 0x02, 0x0]).unwrap();
+                    // beqz t0, x0, 0 (beq t0, x0 (zero register), 0)
+                    // code.write_all(&[0x63, 0x80, 0x02, 0x0]).unwrap();
                 }
 
                 IRInsn::JumpIfNonZero => {
@@ -203,8 +230,11 @@ impl Eval for Jit {
                     // its byte to temp register t0, jump predicated on comparison
 
                     // lb t0, (a0)
-                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap(); 
-                    
+                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap();
+
+                    // beqz t0, .+8
+                    code.write_all(&[0x63, 0x84, 0x02, 0x0]).unwrap();
+
                     // Find the last forward jump position that we have written to code buffer
                     // This will be the desitination of backward jump
                     jump_pair_positions
@@ -214,12 +244,15 @@ impl Eval for Jit {
                         .map(|pair| {
                             pair.bwd_jmp = code.len();
                         });
-                    
+
+                    // j $0 (value to be written later)
+                    code.write_all(&[0x6f, 0xf0, 0x5f, 0xfd]).unwrap();
+
                     // Compare the t0 register with the zero register x0, if they are not equal
                     // (meaning t0 is a non-zero value), branch. Destination to be backpatched
                     // later
-                    // bnez t0, 0 (bne t0, x0, 0) 
-                    code.write_all(&[0x63, 0x90, 0x02, 0x0]).unwrap();
+                    // bnez t0, 0 (bne t0, x0, 0)
+                    // code.write_all(&[0x63, 0x90, 0x02, 0x0]).unwrap();
                 }
 
                 IRInsn::GetChar => {
@@ -238,7 +271,8 @@ impl Eval for Jit {
                         0x93, 0x08, 0xf0, 0x03, // li a7, 63 (syscall number)
                         0x73, 0x0, 0x0, 0x0, // ecall (system call)
                         0x03, 0x35, 0xc1, 0xff, // ld a0, -4(sp) (load it back after syscall)
-                    ]).unwrap();
+                    ])
+                    .unwrap();
                 }
 
                 IRInsn::PutChar => {
@@ -255,7 +289,8 @@ impl Eval for Jit {
                         0x93, 0x08, 0x0, 0x04, // li a7, 64 (syscall number)
                         0x73, 0x0, 0x0, 0x0, // ecall (system call)
                         0x03, 0x35, 0xc1, 0xff, // ld a0, -4(sp) (load it back after syscall)
-                    ]).unwrap();
+                    ])
+                    .unwrap();
                 }
             }
         }
@@ -266,12 +301,12 @@ impl Eval for Jit {
             let fwd_offset = (pair.bwd_jmp - pair.fwd_jmp) as i32;
             let bwd_offset = -fwd_offset;
 
-            encode_b_format_immediate_offset(
+            encode_u_format_immediate_offset(
                 bytemuck::from_bytes_mut(&mut code[pair.fwd_jmp..pair.fwd_jmp + 4]),
                 fwd_offset,
             );
 
-            encode_b_format_immediate_offset(
+            encode_u_format_immediate_offset(
                 bytemuck::from_bytes_mut(&mut code[pair.bwd_jmp..pair.bwd_jmp + 4]),
                 bwd_offset,
             );

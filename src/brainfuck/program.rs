@@ -39,7 +39,7 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn new(source: &str) -> Self {
+    pub fn new(source: &str) -> Result<Self, ()> {
         // Define the code as all the valid operators in the file.
         // Anything that is not '>', '<', '+' and so on is a comment
         let operators: Box<[Operator]> = source
@@ -73,11 +73,11 @@ impl Program {
                 _ => {}
             });
 
-        Self {
+        Ok(Self {
             code: operators,
             fwd_jump_table,
             bwd_jump_table,
-        }
+        })
     }
 }
 

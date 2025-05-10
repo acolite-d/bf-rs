@@ -11,7 +11,7 @@ fn main() {
 
     if let Some(ref filepath) = cli.file {
         if let Ok(source_code) = fs::read_to_string(filepath) {
-            let program = Program::new(&source_code);
+            let program = Program::new(&source_code).unwrap();
 
             match cli.mode {
                 Mode::Interpret => {
