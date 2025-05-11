@@ -7,13 +7,29 @@ use super::{
 use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
 use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
 
+// Important Limits for RISC-V
+// addi (add immediate) instruction encodes a signed 12-bit number
+// define the limits of this value here
+const I_FORMAT_IMMED_RANGE: RangeInclusive<i32> = (-2048..2048);
 
+// Branch instructions also encode a 12-bit signed immediate as a PC-relative offset
+// This value is interpreted as a multiple of 2
+const B_FORMAT_IMMED_RANGE: RangeInclusive<i32> = (-4096..4096);
 
 // Bit masks for parts of the immediate 12 bit offset operand for "B" RISC-V instructions
-const IMMED_MASK1: i32 = 0b0100_0000_0000; // 11th bit
-const IMMED_MASK2: i32 = 0b0000_0000_1111; // bits 1-4
-const IMMED_MASK3: i32 = 0b1000_0000_0000; // 12th bit
-const IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
+const B_IMMED_MASK1: i32 = 0b0100_0000_0000; // 11 bit
+const B_IMMED_MASK2: i32 = 0b0000_0000_1111; // bits 1-4
+const B_IMMED_MASK3: i32 = 0b1000_0000_0000; // 12 bit
+const B_IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
+
+// Bit masks for the "U" format, for unconditional jumps
+const U_IMMED_MASK1: i32 = 0b0000_0000_0011_1111_1111; // bits 1-10
+const U_IMMED_MASK2: i32 = 0b0000_0000_0100_0000_0000; // 11th bit
+const U_IMMED_MASK3: i32 = 0b0111_1111_1000_0000_0000; // bits 12-19
+const U_IMMED_MASK4: i32 = 0b1000_0000_0000_0000_0000; // 20th bit
+
+const CI_IMMED_MASK1: i16 = 0b0000_0000_0001_1111;
+const CI_IMMED_MASK2: i16 = 0b0000_0000_0010_0000;
 
 // RISC-V "B" Instruction Format
 // Every "-" is a bit in a 4-byte instruction encoding
@@ -41,6 +57,30 @@ fn encode_b_format_immediate_offset(b_format_insn: &mut i32, mut offset: i32) {
     let imm4 = (offset & IMMED_MASK4) << 21;
 
     *b_format_insn |= (imm1 | imm2 | imm3 | imm4);
+}
+
+fn encode_u_format_immediate_offset(u_format_insn: &mut i32, offset: i32) {
+    assert!((-1048576..1048576).contains(offset));
+    assert!(offset % 2 == 0);
+
+    let offset_multiple = offset >> 1;
+
+    let imm1 = (offset_multiple & U_IMMED_MASK1) << 21;
+    let imm2 = (offset_multiple & U_IMMED_MASK2) << 10;
+    let imm3 = (offset_multiple & U_IMMED_MASK3) << 1;
+    let imm4 = (offset_multiple & U_IMMED_MASK4) << 12;
+
+    let imm = imm1 | imm2 | imm3 | imm4;
+    *u_format_insn |= imm;
+}
+
+fn encode_ci_format_immediate(ci_format_insn: &mut i16, offset: i16) {
+    assert!((-32..31).contains(offset));
+
+    let imm1 = (offset & CI_IMMED_MASK1) << 2;
+    let imm2 = (offset & CI_IMMED_MASK2) << 7;
+
+    *ci_format_insn |= imm1 | imm2;
 }
 
 pub struct Jit;
@@ -98,40 +138,45 @@ impl Eval for Jit {
         for ir_insn in ir {
             match ir_insn {
                 IRInsn::IncVal(operand) => {
-
                     // lb t0, (a0)
                     code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap();
 
-                    // addi t0, <operand>
-                    let add_insn: i32 = ADDI_T0 | (operand as i32) << 20;
-                    code.write_all(bytemuck::bytes_of(&add_insn));
+                    // c.addi t0, $<operand>
+                    let mut addi_insn: i16 = 0x0281;
+                    encode_ci_immediate(&mut addi_insn, operand as i16);
+                    code.write_all(bytemuck::bytes_of(&addi_insn)).unwrap();
 
                     // sb t0, (a0)
-                    code.write_all(&[0x0, 0x55, 0x00, 0x23]).unwrap();
+                    code.write_all(&[0x23, 0x0, 0x55, 0x0]).unwrap();
                 }
 
                 IRInsn::DecVal(operand) => {
                     // lb t0, (a0)
                     code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap();
 
-                    // addi t0, <operand>
-                    let sign_ext = -(operand as i32) << 20;
-                    let add_insn: i32 = ADDI_T0 | signed_ext;
-                    code.write_all(bytemuck::bytes_of(&add_insn));
+                    // c.addi t0, $-<operand>
+                    let mut caddi_insn = 0x0281;
+                    encode_ci_immediate(&mut caddi_insn, -(operand as i16));
+                    code.write_all(bytemuck::bytes_of(&caddi_insn)).unwrap();
 
                     // sb t0, (a0)
-                    code.write_all(&[0x0, 0x55, 0x00, 0x23]).unwrap();
+                    code.write_all(&[0x23, 0x0, 0x55, 0x0]).unwrap();
                 }
 
                 IRInsn::IncPtr(operand) => {
-                    let add_insn: i32 = ADDI_A0 | (operand as i32 << 20);
-                    code.write_all(bytemuck::bytes_of(&add_insn));
+                    // c.addi a0, $<operand>
+                    let mut caddi_insn = 0x0105;
+                    encode_ci_immediate(&mut caddi, operand as i16);
+
+                    code.write_all(bytemuck::bytes_of(&caddi_insn)).unwrap();
                 }
 
                 IRInsn::DecPtr(operand) => {
-                    let sign_ext12 = -(operand as i32) << 20;
-                    let add_insn: i32 = ADDI_A0 | signed_ext;
-                    code.write_all(bytemuck::bytes_of(&add_insn));
+                    // c.addi a0, $-<operand>
+                    let mut caddi_insn = 0x0105;
+                    encode_ci_immediate(&mut caddi, -(operand as i16));
+
+                    code.write_all(bytemuck::bytes_of(&caddi_insn)).unwrap();
                 }
 
                 IRInsn::JumpIfZero => {
@@ -139,9 +184,10 @@ impl Eval for Jit {
                     // its byte to temp register t0
 
                     // lb t0, (a0)
-                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap(); 
-                    
-                    // cmp instruction here
+                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap();
+
+                    // bnez t0, .+8
+                    code.write_all(&[0x63, 0x94, 0x02, 0x0]).unwrap();
 
                     // Record where this forward jump is, back patch to its destination later
                     jump_pair_positions.push(JumpPairPos {
@@ -149,8 +195,8 @@ impl Eval for Jit {
                         bwd_jmp: 0,
                     });
 
-                    // beqz t0, 0 
-                    code.write_all(&[0x63, 0x80, 0x02, 0x0]).unwrap();
+                    // j . (value to be written later)
+                    code.write_all(&[0x6f, 0x0, 0x0, 0x0]).unwrap();
                 }
 
                 IRInsn::JumpIfNonZero => {
@@ -158,10 +204,13 @@ impl Eval for Jit {
                     // its byte to temp register t0, jump predicated on comparison
 
                     // lb t0, (a0)
-                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap(); 
+                    code.write_all(&[0x83, 0x02, 0x05, 0x0]).unwrap();
 
-                    // Compare 
+                    // beqz t0, .+8
+                    code.write_all(&[0x63, 0x84, 0x02, 0x0]).unwrap();
 
+                    // Find the last forward jump position that we have written to code buffer
+                    // This will be the desitination of backward jump
                     jump_pair_positions
                         .iter_mut()
                         .rev()
@@ -170,43 +219,46 @@ impl Eval for Jit {
                             pair.bwd_jmp = code.len();
                         });
 
-                    code.write_all(&[0x63, 0x90, 0x02, 0x0]).unwrap(); // bnez t0, 0
+                    // j $0 (value to be written later)
+                    code.write_all(&[0x6f, 0xf0, 0x5f, 0xfd]).unwrap();
                 }
 
                 IRInsn::GetChar => {
                     // A inlined read(2) syscall, read(file_descriptor, buffer, length)
                     // Most of this is putting the right values in registers before making
                     // transfering control to kernel to process read(2)
-                    // syscall_number = 0
+                    // syscall_number = 63
                     // file_descriptor = STDIN = 0,
                     // buffer = pointer head
                     // length = 1 (single character)
                     code.write_all(&[
-                        0x23, 0x3e, 0xa1, 0xfe, // sd a0, -4(sp) (save pointer to stack)
-                        0xb7, 0x05, 0x0, 0x0, // lui a1, 0x0 (STDIN)
-                        0x33, 0x06, 0x05, 0x0, // add a2, a0, zero (buffer)
-                        0xb7, 0x16, 0x0, 0x0, // lui a3, 0x1 (length)
-                        0x37, 0x05, 0x0, 0x0, // lui a0, 0x0 (syscall number)
-                        0x73, 0x0, 0x0, 0x0, // ecall (system call)
-                        0x03, 0x35, 0xc1, 0xff, // ld a0, -4(sp) (load it back after syscall)
-                    ]).unwrap();
+                        0x23, 0x3e, 0xa1, 0xfe, // sd a0, -4(sp)
+                        0xad, 0x8d, // c.xor a1, a1, a1 (set a1 to zero, STDIN)
+                        0x2a, 0x86, // c.mv a2, a0 (buffer)
+                        0x85, 0x66, // c.lui a3, 0x1 (length)
+                        0x37, 0xf5, 0x03, 0x0, // lui a0, 63 (syscall number)
+                        0x73, 0x0, 0x0, 0x0, // ecall (make the system call)
+                        0x03, 0x35, 0xc1, 0xff, // ld a0, -4(sp)
+                    ])
+                    .unwrap();
                 }
 
                 IRInsn::PutChar => {
                     // A inlined write(2) syscall, write(file_descriptor, buffer, length)
                     // Writes character from pointer head to STDOUT.
                     // file_descriptor = STOUT = 1
-                    // syscall number = 1
+                    // syscall number = 64
                     // length = 1 (a single character)
                     code.write_all(&[
-                        0x23, 0x3e, 0xa1, 0xfe, // sd a0, -4(sp) (save pointer to stack)
-                        0xb7, 0x15, 0x0, 0x0, // lui a1, 0x1 (STDOUT)
-                        0x33, 0x06, 0x05, 0x0, // add a2, a0, zero (buffer)
-                        0xb7, 0x16, 0x0, 0x0, // lui a3, 0x1 (length)
-                        0x37, 0x15, 0x0, 0x0, // lui a0, 0x1 (syscall number)
-                        0x73, 0x0, 0x0, 0x0, // ecall (system call)
-                        0x03, 0x35, 0xc1, 0xff, // ld a0, -4(sp) (load it back after syscall)
-                    ]).unwrap();
+                        0x23, 0x3e, 0xa1, 0xfe, // sd a0, -4(sp)
+                        0x85, 0x65, // c.lui a1, 1 (STDOUT)
+                        0x2a, 0x86, // c.mv a2, a0 (buffer)
+                        0x85, 0x66, // c.lui a3, 1 (length of buffer)
+                        0x37, 0x05, 0x04, 0x0, // lui a0, 64 (syscall number)
+                        0x73, 0x0, 0x0, 0x0, // ecall (initiate system call)
+                        0x03, 0x35, 0xc1, 0xff, // ld a0, -4(sp)
+                    ])
+                    .unwrap();
                 }
             }
         }
@@ -217,12 +269,12 @@ impl Eval for Jit {
             let fwd_offset = (pair.bwd_jmp - pair.fwd_jmp) as i32;
             let bwd_offset = -fwd_offset;
 
-            encode_b_format_immediate_offset(
+            encode_u_format_immediate_offset(
                 bytemuck::from_bytes_mut(&mut code[pair.fwd_jmp..pair.fwd_jmp + 4]),
                 fwd_offset,
             );
 
-            encode_b_format_immediate_offset(
+            encode_u_format_immediate_offset(
                 bytemuck::from_bytes_mut(&mut code[pair.bwd_jmp..pair.bwd_jmp + 4]),
                 bwd_offset,
             );
