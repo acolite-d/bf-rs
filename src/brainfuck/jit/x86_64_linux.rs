@@ -4,6 +4,7 @@ use super::{
     Eval,
 };
 
+use anyhow::{anyhow, Result};
 use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
 use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
 
@@ -48,11 +49,11 @@ struct JumpPairPos {
 impl Eval for Jit {
     type Output = JittedFunction;
 
-    fn eval_source(src: Program) -> Result<Self::Output, ()> {
+    fn eval_source(src: Program) -> Result<Self::Output> {
         unimplemented!()
     }
 
-    fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
+    fn eval_ir(ir: IR) -> Result<Self::Output> {
         let mut code: Vec<u8> = Vec::with_capacity(4096);
         let mut jump_pair_positions: Vec<JumpPairPos> = vec![];
 

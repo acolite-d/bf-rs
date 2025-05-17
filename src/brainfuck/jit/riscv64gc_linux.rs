@@ -4,6 +4,7 @@ use super::{
     Eval,
 };
 
+use anyhow::Result;
 use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
 use std::{ffi::c_void, io::Write, num::NonZero, ptr::NonNull, slice};
 

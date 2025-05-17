@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// A positional file containing the Brainfuck code you would like to run
-    pub file: Option<PathBuf>,
+    pub file: PathBuf,
 
     /// Specifies the mode of execution, Interpret/Just-In-Time Compilation
     #[arg(short, long, value_enum, default_value = Mode::Interpret)]

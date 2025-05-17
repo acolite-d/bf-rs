@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
 #[repr(u8)]
@@ -39,7 +40,7 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn new(source: &str) -> Result<Self, ()> {
+    pub fn new(source: &str) -> Result<Self> {
         // Define the code as all the valid operators in the file.
         // Anything that is not '>', '<', '+' and so on is a comment
         let operators: Box<[Operator]> = source
@@ -72,6 +73,24 @@ impl Program {
 
                 _ => {}
             });
+
+        for (offset, operator) in operators.iter().copied().enumerate() {
+            match operator {
+                Operator::JumpIfZero => jump_stack.push(offset),
+                Operator::JumpIfNonZero => {
+                    let fwd_jmp_pos = jump_stack.pop().ok_or(anyhow!(
+                        "Unpaired jumps detected: operator {} needs to be paired with a '['!",
+                        offset + 1
+                    ))?;
+                    let bwd_jmp_pos = offset;
+                    let (here, there) = (jump_stack.pop().unwrap(), offset);
+                    fwd_jump_table.insert(here, there);
+                    bwd_jump_table.insert(there, here);
+                }
+
+                _ => {}
+            }
+        }
 
         Ok(Self {
             code: operators,

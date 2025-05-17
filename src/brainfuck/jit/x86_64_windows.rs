@@ -3,14 +3,21 @@ use super::{
     program::Program,
     Eval,
 };
-use windows::Win32::System::Memory::{self, VirtualAlloc};
-use windows::Win32::System::Console;
-use windows::Win32::Foundation::HANDLE;
+use anyhow::Result;
 use windows::Wdk::System::SystemServices::KeInvalidateAllCaches;
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::Console;
+use windows::Win32::System::Memory::{self, VirtualAlloc};
 
-use std::{ffi::{c_void, c_int, c_ulong}, io::Write, num::NonZero, ptr::NonNull, slice};
+use std::{
+    ffi::{c_int, c_ulong, c_void},
+    io::Write,
+    num::NonZero,
+    ptr::NonNull,
+    slice,
+};
 
-extern "C" { 
+extern "C" {
     fn putchar(c: c_int) -> c_int;
     fn getchar() -> c_int;
 }
@@ -56,11 +63,11 @@ struct JumpPairPos {
 impl Eval for Jit {
     type Output = JittedFunction;
 
-    fn eval_source(src: Program) -> Result<Self::Output, ()> {
+    fn eval_source(src: Program) -> Result<Self::Output> {
         unimplemented!()
     }
 
-    fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
+    fn eval_ir(ir: IR) -> Result<Self::Output> {
         let mut code: Vec<u8> = Vec::with_capacity(4096);
         let mut jump_pair_positions: Vec<JumpPairPos> = vec![];
 
@@ -139,10 +146,10 @@ impl Eval for Jit {
 
                     code.write_all(&[
                         // call *%r9 (getchar)
-                        0x41, 0xff, 0xd1,
-                        // movb %al, (%rcx)
+                        0x41, 0xff, 0xd1, // movb %al, (%rcx)
                         0x88, 0x01,
-                    ]).unwrap();
+                    ])
+                    .unwrap();
                 }
 
                 IRInsn::PutChar => {
@@ -152,15 +159,13 @@ impl Eval for Jit {
 
                     code.write_all(&[
                         // push %rcx
-                        0x51,
-                        // mov (%rcx), %rcx
-                        0x48, 0x8b, 0x09,
-                        // call *%r10 (putchar)
-                        0x41, 0xff, 0xd1,
-                        // pop %rcx
-                        0x59
-                    ]).unwrap();
-               }
+                        0x51, // mov (%rcx), %rcx
+                        0x48, 0x8b, 0x09, // call *%r10 (putchar)
+                        0x41, 0xff, 0xd1, // pop %rcx
+                        0x59,
+                    ])
+                    .unwrap();
+                }
             }
         }
 
@@ -176,15 +181,11 @@ impl Eval for Jit {
             code[pair.bwd_jmp + 2..pair.bwd_jmp + 6]
                 .copy_from_slice(bytemuck::bytes_of(&bwd_offset))
         });
-        
+
         let mut exec_mem: &mut [u8] = unsafe {
-            let ptr = Memory::VirtualAlloc(
-                None,
-                code.len(),
-                Memory::MEM_COMMIT,
-                Memory::PAGE_READWRITE,
-            );
-            
+            let ptr =
+                Memory::VirtualAlloc(None, code.len(), Memory::MEM_COMMIT, Memory::PAGE_READWRITE);
+
             let mut _oldflags = Memory::PAGE_PROTECTION_FLAGS(0);
 
             Memory::VirtualProtect(
@@ -195,7 +196,6 @@ impl Eval for Jit {
             )
             .expect("Should be able to enable memory to be executable");
 
-            
             slice::from_raw_parts_mut(ptr.cast(), code.len())
         };
 

@@ -3,6 +3,7 @@ use super::{
     program::{Operator, Program},
     Eval,
 };
+use anyhow::{anyhow, Result};
 use std::ffi::c_int;
 
 extern "C" {
@@ -16,7 +17,7 @@ impl Eval for Interpreter {
     // The interpreter just executes the program, returns nothing
     type Output = ();
 
-    fn eval_source(program: Program) -> Result<Self::Output, ()> {
+    fn eval_source(program: Program) -> Result<Self::Output> {
         // According to this source, https://gist.github.com/roachhd/dce54bec8ba55fb17d3a
         // standard Brainfuck has 30,000 bytes of memory to work with,
         // so initialize an array of 30,000 bytes to start.
@@ -33,9 +34,22 @@ impl Eval for Interpreter {
         // reached the last operator in our code
         while ip < program.code.len() {
             match program.code[ip] {
-                Operator::IncrementPtr => mem_ptr += 1,
+                Operator::IncrementPtr => {
+                    mem_ptr += 1;
 
-                Operator::DecrementPtr => mem_ptr -= 1,
+                    if mem_ptr >= 30_000 {
+                        return Err(anyhow!(
+                            "RUNTIME ERROR: OOB memory pointer, can only address 30,000 bytes, incremented pointer to address byte {}",
+                            mem_ptr+1,
+                        ));
+                    }
+                }
+
+                Operator::DecrementPtr => {
+                    mem_ptr = mem_ptr.checked_sub(1).ok_or(anyhow!(
+                        "RUNTIME ERROR: OOB memory pointer, pointer tried to move past byte 0"
+                    ))?;
+                }
 
                 Operator::IncrementValue => mem[mem_ptr] = mem[mem_ptr].wrapping_add(1),
 
@@ -69,7 +83,7 @@ impl Eval for Interpreter {
         Ok(())
     }
 
-    fn eval_ir(ir: IR) -> Result<Self::Output, ()> {
+    fn eval_ir(ir: IR) -> Result<Self::Output> {
         let mut mem = [0u8; 30_000];
 
         let mut mem_ptr = 0usize;
@@ -79,9 +93,22 @@ impl Eval for Interpreter {
 
         while ip < code.len() {
             match code[ip] {
-                IRInsn::IncPtr(num) => mem_ptr += num as usize,
+                IRInsn::IncPtr(num) => {
+                    mem_ptr += num as usize;
 
-                IRInsn::DecPtr(num) => mem_ptr -= num as usize,
+                    if mem_ptr >= 30_000 {
+                        return Err(anyhow!(
+                            "RUNTIME ERROR: OOB memory pointer, can only address 30,000 bytes, incremented pointer to address byte {}",
+                            mem_ptr+1,
+                        ));
+                    }
+                }
+
+                IRInsn::DecPtr(num) => {
+                    mem_ptr = mem_ptr.checked_sub(num as usize).ok_or(anyhow!(
+                        "RUNTIME ERROR: OOB memory pointer, pointer tried to move past byte 0"
+                    ))?;
+                }
 
                 IRInsn::IncVal(num) => mem[mem_ptr] = mem[mem_ptr].wrapping_add(num),
 
