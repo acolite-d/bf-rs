@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
+use super::error::CompileTimeError;
+
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Operator {
@@ -59,37 +61,25 @@ impl Program {
 
         // Using a stack, pop the last '[' location for every ']' to get
         // corresponding brackets that can jump between each other.
-        operators
-            .iter()
-            .copied()
-            .enumerate()
-            .for_each(|(offset, op)| match op {
-                Operator::JumpIfZero => jump_stack.push(offset),
-                Operator::JumpIfNonZero => {
-                    let (here, there) = (jump_stack.pop().unwrap(), offset);
-                    fwd_jump_table.insert(here, there);
-                    bwd_jump_table.insert(there, here);
-                }
-
-                _ => {}
-            });
-
         for (offset, operator) in operators.iter().copied().enumerate() {
             match operator {
                 Operator::JumpIfZero => jump_stack.push(offset),
                 Operator::JumpIfNonZero => {
-                    let fwd_jmp_pos = jump_stack.pop().ok_or(anyhow!(
-                        "Unpaired jumps detected: operator {} needs to be paired with a '['!",
-                        offset + 1
-                    ))?;
+                    let fwd_jmp_pos = jump_stack
+                        .pop()
+                        .ok_or(CompileTimeError::UnpairedJumpOperator)?;
                     let bwd_jmp_pos = offset;
-                    let (here, there) = (jump_stack.pop().unwrap(), offset);
-                    fwd_jump_table.insert(here, there);
-                    bwd_jump_table.insert(there, here);
+
+                    fwd_jump_table.insert(fwd_jmp_pos, bwd_jmp_pos);
+                    bwd_jump_table.insert(bwd_jmp_pos, fwd_jmp_pos);
                 }
 
                 _ => {}
             }
+        }
+
+        if !jump_stack.is_empty() {
+            return Err(anyhow!(CompileTimeError::UnpairedJumpOperator));
         }
 
         Ok(Self {

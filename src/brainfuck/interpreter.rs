@@ -1,10 +1,12 @@
 use super::{
+    error::RuntimeError,
     ir::{IRInsn, IR},
     program::{Operator, Program},
     Eval,
 };
-use anyhow::{anyhow, Result};
 use std::ffi::c_int;
+
+use anyhow::{anyhow, Result};
 
 extern "C" {
     fn getchar() -> c_int;
@@ -38,17 +40,14 @@ impl Eval for Interpreter {
                     mem_ptr += 1;
 
                     if mem_ptr >= 30_000 {
-                        return Err(anyhow!(
-                            "RUNTIME ERROR: OOB memory pointer, can only address 30,000 bytes, incremented pointer to address byte {}",
-                            mem_ptr+1,
-                        ));
+                        return Err(anyhow!(RuntimeError::TapeHeadRightOOB));
                     }
                 }
 
                 Operator::DecrementPtr => {
-                    mem_ptr = mem_ptr.checked_sub(1).ok_or(anyhow!(
-                        "RUNTIME ERROR: OOB memory pointer, pointer tried to move past byte 0"
-                    ))?;
+                    mem_ptr = mem_ptr
+                        .checked_sub(1)
+                        .ok_or(RuntimeError::TapeHeadLeftOOB)?;
                 }
 
                 Operator::IncrementValue => mem[mem_ptr] = mem[mem_ptr].wrapping_add(1),
@@ -97,17 +96,14 @@ impl Eval for Interpreter {
                     mem_ptr += num as usize;
 
                     if mem_ptr >= 30_000 {
-                        return Err(anyhow!(
-                            "RUNTIME ERROR: OOB memory pointer, can only address 30,000 bytes, incremented pointer to address byte {}",
-                            mem_ptr+1,
-                        ));
+                        return Err(anyhow!(RuntimeError::TapeHeadRightOOB));
                     }
                 }
 
                 IRInsn::DecPtr(num) => {
-                    mem_ptr = mem_ptr.checked_sub(num as usize).ok_or(anyhow!(
-                        "RUNTIME ERROR: OOB memory pointer, pointer tried to move past byte 0"
-                    ))?;
+                    mem_ptr = mem_ptr
+                        .checked_sub(num as usize)
+                        .ok_or(RuntimeError::TapeHeadLeftOOB)?;
                 }
 
                 IRInsn::IncVal(num) => mem[mem_ptr] = mem[mem_ptr].wrapping_add(num),
