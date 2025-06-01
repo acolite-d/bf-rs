@@ -25,9 +25,14 @@ const B_IMMED_MASK4: i32 = 0b0011_1111_0000; // bits 5-10
 
 // Bit masks for the "U" format, for unconditional jumps
 const U_IMMED_MASK1: i32 = 0b0000_0000_0011_1111_1111; // bits 1-10
-const U_IMMED_MASK2: i32 = 0b0000_0000_0100_0000_0000; // 11th bit
+const U_IMMED_MASK2: i32 = 0b0000_0000_0100_0000_0000; // bit 11
 const U_IMMED_MASK3: i32 = 0b0111_1111_1000_0000_0000; // bits 12-19
-const U_IMMED_MASK4: i32 = 0b1000_0000_0000_0000_0000; // 20th bit
+const U_IMMED_MASK4: i32 = 0b1000_0000_0000_0000_0000; // bit 20
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+}
 
 // RISC-V "B" Instruction Format
 // Every "-" is a bit in a 4-byte instruction encoding
@@ -65,7 +70,7 @@ fn encode_u_format_immediate_offset(u_format_insn: &mut i32, offset: i32) {
 
     let imm1 = (offset_multiple & U_IMMED_MASK1) << 21;
     let imm2 = (offset_multiple & U_IMMED_MASK2) << 10;
-    let imm3 = (offset_multiple & U_IMMED_MASK3) << 1;
+    let imm3 = (offset_multiple & U_IMMED_MASK3) << 2;
     let imm4 = (offset_multiple & U_IMMED_MASK4) << 12;
 
     let imm = imm1 | imm2 | imm3 | imm4;
