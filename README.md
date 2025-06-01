@@ -1,30 +1,32 @@
-# Another Brainfuck Implementation, Written in Rust, for Exploratory Purposes
+# Nouhjit (脳JIT)
+Nouhjit is just another Brainfuck implementation, made just for fun and exploratory purposes. It can both interpret, and JIT compile Brainfuck programs. Meant to be an excuse to learn RISCV assembly.
 
-Currently only interprets Brainfuck programs, but aim to supply JIT compilation for a number of targets. A number of test programs can be found in the `test_programs/` directory.
+Currently JIT support is limited to the following platforms:
+- x86_64 GNU/Linux
+- x86_64 Windows
+- RISCV64 GNU/Linux*
 
-To compile, `cargo build`. To run, `cargo run -- --help`. Switch between interpreter and JIT compiler with the "mode" argument.  
+**RISCV support includes two versions, one that uses compressed instructions included in the "C" extension of RISCV, and one that does not.**
+
+Some example Brainfuck programs are provided in the test_programs/ directory.
 
 ## Command Line Interface
 ```
-brainrust$ cargo r -- --help
-   Compiling brainrust v0.1.0 (/home/jdorman/projects/brainrust)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
-     Running `target/debug/brainrust --help`
-Usage: brainrust [OPTIONS] [FILE]
+Usage: nouhjit [OPTIONS] <FILE>
 
 Arguments:
-  [FILE]
+  <FILE>
           A positional file containing the Brainfuck code you would like to run
 
 Options:
   -m, --mode <MODE>
           Specifies the mode of execution, Interpret/Just-In-Time Compilation
 
-          [default: interpreter]
+          [default: interpret]
 
           Possible values:
-          - interpreter: Execute via interpreter
-          - jit:         Execute via Jit compilation and execution
+          - interpret: Execute via interpreter
+          - jit:       Execute via Jit compilation and execution
 
   -h, --help
           Print help (see a summary with '-h')
@@ -32,6 +34,8 @@ Options:
   -V, --version
           Print version
 ```
+```
+```
 
-```
-```
+
+
