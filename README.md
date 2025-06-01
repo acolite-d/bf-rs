@@ -6,7 +6,7 @@ Currently JIT support is limited to the following platforms:
 - x86_64 Windows
 - RISCV64 GNU/Linux*
 
-**RISCV support includes two versions, one that uses compressed instructions included in the "C" extension of RISCV, and one that does not.**
+**RISCV support includes two versions, one that uses compressed instructions included in the "C" extension of RISCV, and one that does not. At minimum, the platform should support the general "G" extensions.**
 
 Some example Brainfuck programs are provided in the test_programs/ directory.
 
@@ -34,8 +34,4 @@ Options:
   -V, --version
           Print version
 ```
-```
-```
-
-
 
